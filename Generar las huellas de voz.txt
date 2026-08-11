@@ -1,0 +1,2 @@
+1. borrar el archivi
+2 python voz.py muestras

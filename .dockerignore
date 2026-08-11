@@ -1,0 +1,20 @@
+.git
+__pycache__/
+*.pyc
+
+# Datos y muestras pesados: se montan como volúmenes, no van en la imagen
+BAJAR MUESTRAS/
+BAJAR MUESTRAS.rar
+muestras_voz/
+muestras_voz2/
+modelos_voz/
+sesiones_en_vivo/
+sesiones.db
+sesiones.db-wal
+sesiones.db-shm
+jobs_data/
+.env
+
+# Documentación pesada, no necesaria dentro del contenedor
+*.docx
+*.pdf

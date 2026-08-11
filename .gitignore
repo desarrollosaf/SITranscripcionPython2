@@ -1,0 +1,26 @@
+# Secretos — nunca subir
+.env
+
+# Datos y muestras pesados (audio, huellas de voz, sesiones grabadas)
+BAJAR MUESTRAS/
+BAJAR MUESTRAS.rar
+muestras_voz/
+muestras_voz2/
+modelos_voz/
+sesiones_en_vivo/
+jobs_data/
+
+# Base de datos (crece con cada sesión; no es código)
+sesiones.db
+sesiones.db-wal
+sesiones.db-shm
+
+# Python
+__pycache__/
+*.pyc
+
+# Log del lanzador de transcripción desde revisar.py
+transcripcion_en_curso.log
+
+# Sistema
+.DS_Store

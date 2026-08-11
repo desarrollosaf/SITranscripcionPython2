@@ -1,0 +1,79 @@
+services:
+  transcriptor:
+    build: .
+    image: si-transcripcion:latest
+    volumes:
+      # Monta el proyecto completo: así sesiones.db, sesiones_en_vivo/,
+      # voces_perfiles.json, diputados.txt y muestras_voz/ persisten en tu
+      # disco y sobreviven a docker compose down / rebuilds.
+      - .:/app
+      # Cache de los modelos (Whisper y speechbrain) para no re-descargarlos
+      # en cada `docker compose run`.
+      - whisper-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+  # API (FastAPI): recibe url + participantes del otro sistema, lanza
+  # transcribir_en_vivo_c3.py acotado a esos participantes y expone el
+  # resultado. Usuarios/login y el registro de trabajos viven en TU MySQL
+  # (fuera de este compose); las transcripciones (texto/oradores) se siguen
+  # guardando en sesiones.db (SQLite) igual que en el servicio "transcriptor".
+  api:
+    build: .
+    image: si-transcripcion:latest
+    entrypoint: []
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    extra_hosts:
+      # En Linux, a diferencia de Docker Desktop (Mac/Windows), hay que
+      # mapear host.docker.internal a mano para llegar al MySQL del host.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/app
+      - whisper-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
+    environment:
+      # Define estos valores en un archivo .env junto a este compose (ver
+      # .env.example). Sin .env, la API arranca pero /auth/login fallará al
+      # no poder conectar a MySQL: el error lo deja claro en los logs.
+      # DB_HOST=host.docker.internal apunta al MySQL que corre en el propio
+      # host (fuera de este compose); en tu servidor solo cambias ese valor.
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-}
+      - DB_NAME=${DB_NAME:-transcripcion_api}
+      - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
+
+  # Interfaz visual de revisión (revisar.py): la página con la barra
+  # lateral, el texto por orador, edición de nombres/texto y resúmenes.
+  # Corre sobre la misma sesiones.db que "transcriptor"/"api".
+  revisor:
+    build: .
+    image: si-transcripcion:latest
+    entrypoint: []
+    command: ["python", "revisar.py", "--host", "0.0.0.0",
+              "--puerto", "8756", "--db", "sesiones.db", "--requiere-login"]
+    ports:
+      - "${REVISOR_PORT:-8756}:8756"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/app
+    environment:
+      # Mismos usuarios/login que el servicio "api" (misma MySQL, mismo
+      # JWT_SECRET): un usuario creado con crear_admin.py o POST /usuarios
+      # sirve para entrar tanto a la API como a esta interfaz.
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-}
+      - DB_NAME=${DB_NAME:-transcripcion_api}
+      - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+volumes:
+  whisper-cache:
+  torch-cache:

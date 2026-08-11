@@ -1,0 +1,9 @@
+# Dependencias de la API (FastAPI + login/usuarios en MySQL)
+# Instalar con:  pip install -r requirements-api.txt
+fastapi
+uvicorn[standard]
+pymysql
+python-jose[cryptography]
+bcrypt
+python-multipart
+email-validator

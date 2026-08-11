@@ -1,0 +1,9 @@
+# Dependencias del reconocimiento por huella de voz (voz.py)
+# Instalar con:  pip install -r requirements-voz.txt
+#
+# Todo viene precompilado (no necesita compiladores en Windows).
+# La descarga es grande (~1 GB por PyTorch): puede tardar 10-20 min.
+# Si un error menciona numpy, prueba:  pip install "numpy<2"  y reintenta.
+torch
+torchaudio
+speechbrain
