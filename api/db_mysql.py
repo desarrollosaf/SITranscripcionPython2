@@ -57,6 +57,7 @@ def inicializar_esquema():
             "fuente": "VARCHAR(10) NOT NULL DEFAULT 'youtube'",
             "puerto": "INT NULL",
             "passphrase": "VARCHAR(64) NULL",
+            "evento_id": "VARCHAR(64) NULL",
         })
 
 

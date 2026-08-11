@@ -157,7 +157,16 @@ def _cola_log(log_path, max_chars=4000):
         return None
 
 
-def crear_trabajo(usuario_id, datos):
+def trabajo_activo_por_evento(evento_id):
+    """Trabajo ya corriendo (ejecutando) para este evento_id, si existe."""
+    with conexion() as con, con.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM trabajos WHERE evento_id = %s AND estado = 'ejecutando' "
+            "ORDER BY creado_en DESC LIMIT 1", (evento_id,))
+        return cur.fetchone()
+
+
+def crear_trabajo(usuario_id, datos, evento_id=None):
     if datos.modelo not in settings.modelos_permitidos:
         raise ValueError(f"modelo inválido: {datos.modelo}")
     if datos.fuente not in ("youtube", "srt"):
@@ -208,11 +217,11 @@ def crear_trabajo(usuario_id, datos):
         cur.execute(
             "INSERT INTO trabajos (id, usuario_id, url, participantes_pedidos, "
             "participantes_encontrados, participantes_no_encontrados, modelo, "
-            "fuente, puerto, passphrase, estado, pid) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "fuente, puerto, passphrase, evento_id, estado, pid) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (job_id, usuario_id, url_guardada, json.dumps(datos.participantes),
              json.dumps(encontrados), json.dumps(no_encontrados), datos.modelo,
-             datos.fuente, puerto, passphrase, "ejecutando", proc.pid))
+             datos.fuente, puerto, passphrase, evento_id, "ejecutando", proc.pid))
 
     with _lock:
         _procesos[job_id] = {"proc": proc, "log": log}

@@ -66,13 +66,23 @@ def crear_desde_evento(datos: TrabajoDesdeEvento, usuario=Depends(usuario_actual
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "El evento no trae integrantes")
 
+    activo = jobs.trabajo_activo_por_evento(datos.evento_id)
+    if activo:
+        detalle_puerto = (f", esperando audio en el puerto {activo['puerto']}"
+                          if activo["puerto"] else "")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Ya hay un trabajo activo para este evento (id {activo['id']}"
+            f"{detalle_puerto}) — detenlo antes de crear otro, o úsalo "
+            "directamente.")
+
     trabajo = TrabajoCrear(
         url=evento.get("liga") or (evento.get("descripcion") or "")[:200].strip(),
         participantes=participantes,
         modelo=datos.modelo, bloque=datos.bloque,
         fuente="youtube" if evento.get("liga") else "srt")
     try:
-        fila = jobs.crear_trabajo(usuario["id"], trabajo)
+        fila = jobs.crear_trabajo(usuario["id"], trabajo, evento_id=datos.evento_id)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return _a_trabajo_out(fila)
