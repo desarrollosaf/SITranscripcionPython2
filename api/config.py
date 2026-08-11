@@ -18,5 +18,11 @@ class Settings:
 
     modelos_permitidos = {"tiny", "base", "small", "medium", "large-v3"}
 
+    # Rango de puertos UDP reservados para audio SRT entrante (consola de
+    # audio / Dante empujando en vivo), uno por transmisión simultánea.
+    # Debe coincidir con el rango publicado en docker-compose.yml.
+    srt_puerto_base = int(os.environ.get("SRT_PUERTO_BASE", "9000"))
+    srt_puerto_fin = int(os.environ.get("SRT_PUERTO_FIN", "9009"))
+
 
 settings = Settings()

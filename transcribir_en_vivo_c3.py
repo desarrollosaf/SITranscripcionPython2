@@ -787,6 +787,24 @@ def iniciar_captura(url, carpeta_audio, segundos_bloque):
     return p_ytdlp, p_ffmpeg
 
 
+def iniciar_captura_srt(puerto, passphrase, carpeta_audio, segundos_bloque):
+    """Como iniciar_captura(), pero para audio entregado en vivo por SRT
+    (p. ej. una consola de audio con interfaz USB o Dante Virtual Soundcard,
+    empujando desde otra máquina) en vez de una URL de YouTube. ffmpeg
+    escucha el puerto en modo servidor; no hay proceso yt-dlp."""
+    patron_salida = os.path.join(carpeta_audio, "bloque_%06d.wav")
+    p_ffmpeg = subprocess.Popen([
+        "ffmpeg", "-loglevel", "error",
+        "-i", f"srt://0.0.0.0:{puerto}?mode=listener&passphrase={passphrase}",
+        "-ac", "1", "-ar", "16000",
+        "-f", "segment",
+        "-segment_time", str(segundos_bloque),
+        "-reset_timestamps", "1",
+        patron_salida,
+    ])
+    return None, p_ffmpeg
+
+
 def indice_de_bloque(ruta):
     m = re.search(r"bloque_(\d+)\.wav$", os.path.basename(ruta))
     return int(m.group(1)) if m else 0
@@ -871,6 +889,14 @@ def main():
                     help="pausa (en segundos) que cierra el tramo de voz en "
                          "curso; lo que siga se identifica por su cuenta "
                          "(default: 2.0)")
+    ap.add_argument("--puerto-srt", type=int, default=None,
+                    help="en vez de bajar de YouTube, escucha audio entrante "
+                         "por SRT en este puerto (consola de audio empujando "
+                         "en vivo). Si se usa, 'url' es solo una etiqueta "
+                         "descriptiva del evento, no un link real")
+    ap.add_argument("--srt-passphrase", default="",
+                    help="contraseña para cifrar el stream SRT entrante "
+                         "(requerido junto con --puerto-srt)")
     args = ap.parse_args()
 
     # Consola en UTF-8 (evita errores de acentos en Windows)
@@ -912,8 +938,12 @@ def main():
     os.makedirs(carpeta_audio, exist_ok=True)
     ruta_txt = os.path.join(carpeta, "transcripcion_en_vivo.txt")
 
-    print("Obteniendo información del video...")
-    titulo = obtener_titulo(args.url) or args.url
+    if args.puerto_srt:
+        # No hay video que consultar: args.url es solo una etiqueta.
+        titulo = args.url
+    else:
+        print("Obteniendo información del video...")
+        titulo = obtener_titulo(args.url) or args.url
 
     print(f"Cargando modelo Whisper '{args.modelo}' "
           "(la primera vez se descarga, puede tardar)...")
@@ -954,9 +984,15 @@ def main():
     print(f"\nSesión #{sesion_id}: {titulo}")
     print(f"Base de datos : {os.path.abspath(args.db)}")
     print(f"Texto en vivo : {os.path.abspath(ruta_txt)}")
-    print("Conectando a la transmisión... (Ctrl+C para detener)\n")
 
-    p_ytdlp, p_ffmpeg = iniciar_captura(args.url, carpeta_audio, args.bloque)
+    if args.puerto_srt:
+        print(f"Escuchando audio SRT en el puerto {args.puerto_srt} "
+              "(Ctrl+C para detener)\n")
+        p_ytdlp, p_ffmpeg = iniciar_captura_srt(
+            args.puerto_srt, args.srt_passphrase, carpeta_audio, args.bloque)
+    else:
+        print("Conectando a la transmisión... (Ctrl+C para detener)\n")
+        p_ytdlp, p_ffmpeg = iniciar_captura(args.url, carpeta_audio, args.bloque)
 
     # ---- Estado de la transcripción ----
     estado = {
@@ -1472,12 +1508,13 @@ def main():
                 pass
 
     def terminar_captura():
+        # p_ytdlp es None en modo --puerto-srt (no hay proceso yt-dlp).
         for p in (p_ffmpeg, p_ytdlp):
-            if p.poll() is None:
+            if p is not None and p.poll() is None:
                 p.terminate()
         time.sleep(2)
         for p in (p_ffmpeg, p_ytdlp):
-            if p.poll() is None:
+            if p is not None and p.poll() is None:
                 p.kill()
 
     # ---- Bucle principal ----

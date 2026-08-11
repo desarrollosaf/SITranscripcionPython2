@@ -298,6 +298,49 @@ existen (si ninguno existe, devuelve error 400 antes de lanzar nada).
 además de en MySQL — corre la API con un solo worker/réplica (como está
 configurado por default) para que el seguimiento de cada proceso funcione.
 
+### Fuente de audio por SRT (consola de audio / Dante, sin YouTube)
+
+Cuando el audio no viene de un link de YouTube sino de una consola de
+audio (interfaz USB o Dante Virtual Soundcard en otra máquina), el
+trabajo se crea con `fuente: "srt"` en vez de una URL:
+
+```json
+POST /transcripciones
+{
+  "fuente": "srt",
+  "url": "Comisión de Desarrollo Social",
+  "participantes": ["Juan Hernández García", "María Pérez López"]
+}
+```
+
+La API asigna un puerto libre del rango `SRT_PUERTO_BASE`–`SRT_PUERTO_FIN`
+(ver `.env.example`) y una contraseña, y deja `transcribir_en_vivo_c3.py`
+escuchando ese puerto por SRT en vez de bajar de YouTube — todo lo demás
+(Whisper, `--voz`, la base de datos) funciona exactamente igual.
+
+`GET /transcripciones/esperando-audio` lista **todos** los trabajos SRT
+activos (de cualquier usuario) con su puerto y contraseña — es lo que
+consulta la app de escritorio del operador para saber a qué comisión
+conectarse. Abre el rango `SRT_PUERTO_BASE`-`SRT_PUERTO_FIN` (UDP) en el
+firewall/security group de tu servidor en la nube, además del puerto de
+la API.
+
+### App de escritorio para el operador de audio (`agente_captura/`)
+
+Como quien opera la consola no necesariamente sabe programar, hay una app
+de Windows (`agente_captura/app.py`, un solo `.exe` con todo incluido)
+que hace el lado de la consola: inicia sesión con su usuario (el mismo de
+la API), ve la lista de comisiones esperando audio, elige el dispositivo
+detectado (interfaz USB o cualquier canal de Dante Virtual Soundcard —
+soporta varios a la vez si hay varias comisiones simultáneas) y presiona
+Iniciar/Detener por cada una.
+
+**Generar el `.exe`:** cada vez que se sube algo en `agente_captura/`, el
+workflow `.github/workflows/build-agente-captura.yml` lo compila solo en
+un runner de Windows (empacando ffmpeg incluido) y lo deja como artifact
+descargable en la pestaña "Actions" del repo en GitHub — no hace falta
+una PC con Windows para generarlo, solo subir el código.
+
 ## Corregir oradores con la interfaz web (revisar.py)
 
 Después de una sesión (o incluso mientras corre), abre la interfaz de revisión:

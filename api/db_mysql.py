@@ -53,3 +53,20 @@ def inicializar_esquema():
                 FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
             )
         """)
+        _agregar_columnas_si_faltan(cur, "trabajos", {
+            "fuente": "VARCHAR(10) NOT NULL DEFAULT 'youtube'",
+            "puerto": "INT NULL",
+            "passphrase": "VARCHAR(64) NULL",
+        })
+
+
+def _agregar_columnas_si_faltan(cur, tabla, columnas):
+    """Migración idempotente: agrega columnas nuevas a una tabla que ya
+    puede existir en producción, sin tocar las que ya tiene."""
+    cur.execute(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (tabla,))
+    existentes = {r["COLUMN_NAME"] for r in cur.fetchall()}
+    for columna, ddl in columnas.items():
+        if columna not in existentes:
+            cur.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {ddl}")

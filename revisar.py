@@ -419,18 +419,43 @@ main{padding:26px 30px 90px;max-width:820px}
 <details class="lanzador" id="lanzador">
   <summary>Nueva transcripción</summary>
   <div class="cuerpo-lan">
-    <label class="campo">URL del video o transmisión
-      <input id="lanUrl" type="url" placeholder="https://www.youtube.com/watch?v=…">
-    </label>
-    <label class="campo">Tipo de sesión
-      <select id="lanTipo">
-        <option value="pleno">Pleno (sesión)</option>
-        <option value="comision">Comisión</option>
+    <label class="campo">Origen
+      <select id="lanOrigen">
+        <option value="url">URL manual</option>
+        <option value="evento">Evento del Congreso</option>
       </select>
     </label>
-    <label class="campo oculto" id="campoComisiones">Comisión(es) — Ctrl/Cmd para varias unidas
-      <select id="lanComisiones" multiple></select>
-    </label>
+    <div id="camposUrl">
+      <label class="campo">URL del video o transmisión
+        <input id="lanUrl" type="url" placeholder="https://www.youtube.com/watch?v=…">
+      </label>
+      <label class="campo">Tipo de sesión
+        <select id="lanTipo">
+          <option value="pleno">Pleno (sesión)</option>
+          <option value="comision">Comisión</option>
+        </select>
+      </label>
+      <label class="campo oculto" id="campoComisiones">Comisión(es) — Ctrl/Cmd para varias unidas
+        <select id="lanComisiones" multiple></select>
+      </label>
+      <label class="campo oculto" id="campoFecha">Fecha (opcional)
+        <input id="lanFecha" type="text" placeholder="AAAA-MM-DD" size="12">
+      </label>
+    </div>
+    <div id="camposEvento" class="oculto">
+      <label class="campo">Tipo
+        <select id="evTipo">
+          <option value="1">Sesión / Diputación permanente</option>
+          <option value="0">Comisión</option>
+        </select>
+      </label>
+      <label class="campo">Evento
+        <select id="evEvento" style="min-width:360px"></select>
+      </label>
+      <p class="nota-lan" id="notaEvento">Los participantes y, si el evento
+      trae liga de YouTube, la URL, salen automáticos de ahí — no hace
+      falta escribir nada más.</p>
+    </div>
     <label class="campo">Modelo
       <select id="lanModelo">
         <option value="tiny">tiny (rápido)</option>
@@ -439,9 +464,6 @@ main{padding:26px 30px 90px;max-width:820px}
         <option value="medium">medium</option>
         <option value="large-v3">large-v3 (lento, preciso)</option>
       </select>
-    </label>
-    <label class="campo oculto" id="campoFecha">Fecha (opcional)
-      <input id="lanFecha" type="text" placeholder="AAAA-MM-DD" size="12">
     </label>
     <button id="btnTranscribir" class="accion primario">Iniciar transcripción</button>
     <button id="btnDetener" class="accion oculto">Detener</button>
@@ -1117,7 +1139,57 @@ async function cargarLanzador(){
   $('#lanTipo').onchange = sincronizarTipo;
   sincronizarTipo();
 
+  let eventosCargados = false;
+  const cargarEventos = async () => {
+    const sel = $('#evEvento');
+    sel.innerHTML = '<option>Cargando…</option>';
+    const eventos = await api('/api/eventos_parlamentarios?tipo='
+      + $('#evTipo').value);
+    if(eventos.error){
+      sel.innerHTML = '<option value="">(error al consultar)</option>';
+      return avisar(eventos.error);
+    }
+    sel.innerHTML = eventos.map(e => {
+      const fecha = (e.fecha || '').slice(0, 10);
+      const marca = e.liga ? ' 🔗' : '';
+      return '<option value="' + esc(e.id) + '">'
+        + esc(fecha + ' — ' + (e.descripcion || '').slice(0, 70) + marca)
+        + '</option>';
+    }).join('') || '<option value="">(sin eventos)</option>';
+  };
+  $('#evTipo').onchange = cargarEventos;
+
+  const sincronizarOrigen = () => {
+    const esEvento = $('#lanOrigen').value === 'evento';
+    $('#camposUrl').classList.toggle('oculto', esEvento);
+    $('#camposEvento').classList.toggle('oculto', !esEvento);
+    if(esEvento && !eventosCargados){ eventosCargados = true; cargarEventos(); }
+  };
+  $('#lanOrigen').onchange = sincronizarOrigen;
+  sincronizarOrigen();
+
   $('#btnTranscribir').onclick = async () => {
+    $('#btnTranscribir').disabled = true;
+    if($('#lanOrigen').value === 'evento'){
+      const eventoId = $('#evEvento').value;
+      if(!eventoId){
+        $('#btnTranscribir').disabled = false;
+        return avisar('Elige un evento de la lista.');
+      }
+      const r = await api('/api/transcripciones_evento', {
+        evento_id: eventoId, tipo: $('#evTipo').value,
+        modelo: $('#lanModelo').value});
+      $('#btnTranscribir').disabled = false;
+      if(r.error) return avisar(typeof r.error === 'string'
+        ? r.error : JSON.stringify(r.error));
+      let msg = 'Trabajo creado (' + r.fuente + ').';
+      if(r.fuente === 'srt') msg += ' Esperando audio en el puerto ' + r.puerto + '.';
+      if((r.participantes_no_encontrados || []).length)
+        msg += ' Sin huella de voz: ' + r.participantes_no_encontrados.join(', ') + '.';
+      avisar(msg);
+      setTimeout(refrescarSelectorSesiones, 4000);
+      return;
+    }
     const tipo = $('#lanTipo').value;
     const cuerpo = {
       url: $('#lanUrl').value.trim(),
@@ -1128,11 +1200,14 @@ async function cargarLanzador(){
         ? Array.from($('#lanComisiones').selectedOptions).map(o => o.value)
         : [])
     };
-    if(!cuerpo.url.startsWith('http'))
+    if(!cuerpo.url.startsWith('http')){
+      $('#btnTranscribir').disabled = false;
       return avisar('Pega una URL de video válida.');
-    if(tipo === 'comision' && !cuerpo.comisiones.length)
+    }
+    if(tipo === 'comision' && !cuerpo.comisiones.length){
+      $('#btnTranscribir').disabled = false;
       return avisar('Elige al menos una comisión.');
-    $('#btnTranscribir').disabled = true;
+    }
     const r = await api('/api/transcribir', cuerpo);
     $('#btnTranscribir').disabled = false;
     if(r.error) return avisar(r.error);
@@ -1572,6 +1647,10 @@ class Manejador(BaseHTTPRequestHandler):
     # Lanzador de transcripción (costura 2)
     ruta_transcriptor = "transcribir_en_vivo_c3.py"
     ruta_contextos = "contextos.json"
+    # URL interna de la API (api/) para crear trabajos "desde evento real"
+    # del sistema de registro parlamentario. Solo se usa dentro de Docker,
+    # donde "api" es el nombre del servicio hermano en el mismo compose.
+    api_interna = "http://api:8000"
     proc_activo = None          # subprocess.Popen en curso (o None)
     log_transcripcion = None    # ruta del log de la transcripción en curso
     _lock_proc = threading.Lock()
@@ -1833,6 +1912,45 @@ class Manejador(BaseHTTPRequestHandler):
                 {"error": f"No pude detenerla: {e}"}, codigo=500)
         return self._responder({"ok": True, "detenida": True})
 
+    def _crear_transcripcion_evento(self, datos):
+        """Reenvía a la API (api/) la creación de un trabajo a partir de un
+        evento real del Congreso, usando el mismo token de sesión del
+        operador (no requiere iniciar sesión otra vez)."""
+        token = None
+        m = re.search(rf"{COOKIE_SESION}=([^;]+)",
+                      self.headers.get("Cookie", ""))
+        if m:
+            token = m.group(1)
+        if not token:
+            return self._responder({"error": "No autenticado"}, codigo=401)
+
+        import urllib.error
+        import urllib.request
+        cuerpo = json.dumps({
+            "evento_id": datos.get("evento_id"),
+            "tipo": int(datos.get("tipo", 1)),
+            "modelo": datos.get("modelo") or "small",
+        }).encode("utf-8")
+        peticion = urllib.request.Request(
+            f"{self.api_interna}/transcripciones/desde-evento", data=cuerpo,
+            headers={"Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(peticion, timeout=20) as r:
+                return self._responder(json.loads(r.read().decode("utf-8")))
+        except urllib.error.HTTPError as e:
+            crudo = e.read().decode("utf-8", errors="replace")
+            try:
+                detalle = json.loads(crudo).get("detail", crudo)
+            except ValueError:
+                detalle = crudo
+            return self._responder({"error": detalle}, codigo=e.code)
+        except Exception as e:
+            return self._responder(
+                {"error": f"No pude contactar la API ({self.api_interna}): {e}"},
+                codigo=502)
+
     def do_GET(self):
         p = urlparse(self.path)
         if p.path == "/login":
@@ -1906,6 +2024,31 @@ class Manejador(BaseHTTPRequestHandler):
             except Exception as e:
                 info["error"] = str(e)
             self._responder(info)
+        elif p.path == "/api/eventos_parlamentarios":
+            # Eventos reales (sesiones/comisiones) del sistema de registro
+            # parlamentario, para elegir uno en vez de escribir URL/tipo a
+            # mano — participantes salen automáticos de ahí.
+            q = parse_qs(p.query)
+            tipo = q.get("tipo", ["1"])[0]
+            base = os.environ.get(
+                "PARLAMENTARIO_API_URL",
+                "https://parlamentario.congresoedomex.gob.mx/backend/api/"
+                "eventos/ultimoseventos")
+            import urllib.request
+            try:
+                with urllib.request.urlopen(f"{base}/{tipo}", timeout=15) as r:
+                    datos = json.loads(r.read().decode("utf-8"))
+                eventos = [{"id": e.get("id"),
+                           "descripcion": (e.get("descripcion") or "").strip(),
+                           "fecha": e.get("fecha"),
+                           "tipoevento": e.get("tipoevento"),
+                           "liga": e.get("liga")}
+                          for e in datos.get("data", [])]
+                self._responder(eventos)
+            except Exception as e:
+                self._responder(
+                    {"error": f"No pude consultar el Congreso: {e}"},
+                    codigo=502)
         elif p.path == "/api/exportar_word":
             q = parse_qs(p.query)
             try:
@@ -2144,6 +2287,8 @@ class Manejador(BaseHTTPRequestHandler):
             return self._lanzar_transcripcion(datos)
         if p.path == "/api/detener":
             return self._detener_transcripcion()
+        if p.path == "/api/transcripciones_evento":
+            return self._crear_transcripcion_evento(datos)
 
         con = self._db()
         try:
@@ -2444,6 +2589,10 @@ def main():
     ap.add_argument("--contextos", default="contextos.json",
                     help="archivo de contextos para llenar el select de "
                          "comisiones (default: contextos.json)")
+    ap.add_argument("--api-interna", default="http://api:8000",
+                    help="URL de la API (api/) para crear trabajos desde "
+                        "un evento real del Congreso (default: "
+                        "http://api:8000, el nombre del servicio en Docker)")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Dirección donde escuchar (default: 127.0.0.1; "
                         "usa 0.0.0.0 para exponerlo fuera de esta máquina, "
@@ -2485,6 +2634,7 @@ def main():
     Manejador.ruta_db = args.db
     Manejador.ruta_transcriptor = args.transcriptor
     Manejador.ruta_contextos = args.contextos
+    Manejador.api_interna = args.api_interna
     direccion = f"http://{args.host}:{args.puerto}"
     servidor = ThreadingHTTPServer((args.host, args.puerto), Manejador)
 

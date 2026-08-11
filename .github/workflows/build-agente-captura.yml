@@ -1,0 +1,50 @@
+name: Compilar agente_captura (.exe)
+
+on:
+  push:
+    paths:
+      - "agente_captura/**"
+      - ".github/workflows/build-agente-captura.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agente_captura/requirements.txt
+          pip install pyinstaller
+
+      - name: Descargar ffmpeg (build estático de Windows)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extraido
+          $exe = Get-ChildItem -Path ffmpeg_extraido -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $exe.FullName agente_captura\ffmpeg.exe
+
+      - name: Compilar .exe (todo incluido)
+        run: |
+          pyinstaller --onefile --windowed --noconfirm `
+            --name AgenteCapturaAudio `
+            --add-binary "agente_captura\ffmpeg.exe;." `
+            agente_captura\app.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgenteCapturaAudio-windows
+          path: dist/AgenteCapturaAudio.exe
+
+      - name: Adjuntar a la Release (si es un tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/AgenteCapturaAudio.exe

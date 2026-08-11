@@ -26,6 +26,10 @@ services:
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "${API_PORT:-8000}:8000"
+      # Puertos UDP para audio SRT entrante (consola de audio / Dante
+      # empujando en vivo), uno por transmisión simultánea. Ábrelo también
+      # en el firewall/security group de tu proveedor de nube.
+      - "${SRT_PUERTO_BASE:-9000}-${SRT_PUERTO_FIN:-9009}:${SRT_PUERTO_BASE:-9000}-${SRT_PUERTO_FIN:-9009}/udp"
     extra_hosts:
       # En Linux, a diferencia de Docker Desktop (Mac/Windows), hay que
       # mapear host.docker.internal a mano para llegar al MySQL del host.
@@ -46,6 +50,8 @@ services:
       - DB_PASS=${DB_PASS:-}
       - DB_NAME=${DB_NAME:-transcripcion_api}
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
+      - SRT_PUERTO_BASE=${SRT_PUERTO_BASE:-9000}
+      - SRT_PUERTO_FIN=${SRT_PUERTO_FIN:-9009}
 
   # Interfaz visual de revisión (revisar.py): la página con la barra
   # lateral, el texto por orador, edición de nombres/texto y resúmenes.
@@ -55,7 +61,8 @@ services:
     image: si-transcripcion:latest
     entrypoint: []
     command: ["python", "revisar.py", "--host", "0.0.0.0",
-              "--puerto", "8756", "--db", "sesiones.db", "--requiere-login"]
+              "--puerto", "8756", "--db", "sesiones.db", "--requiere-login",
+              "--api-interna", "http://api:8000"]
     ports:
       - "${REVISOR_PORT:-8756}:8756"
     extra_hosts:

@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import signal
 import sqlite3
 import subprocess
@@ -22,9 +23,17 @@ _procesos = {}
 _lock = threading.Lock()
 
 
-def _normalizar(texto):
-    s = unicodedata.normalize("NFKD", texto.strip().lower())
-    return "".join(c for c in s if not unicodedata.combining(c))
+CONECTORES = {"de", "del", "la", "las", "los", "y", "e"}
+
+
+def _palabras_significativas(nombre):
+    """Conjunto de palabras del nombre (sin acentos/mayúsculas, sin
+    conectores). Compara por CONTENIDO, no por orden — necesario porque
+    voces_perfiles.json usa 'NOMBRE APELLIDOS' y el sistema de registro
+    parlamentario manda 'Apellidos Nombre'."""
+    s = unicodedata.normalize("NFKD", nombre.strip().lower())
+    sin_acentos = "".join(c for c in s if not unicodedata.combining(c))
+    return frozenset(w for w in sin_acentos.split() if w not in CONECTORES)
 
 
 def cargar_catalogo_perfiles():
@@ -36,12 +45,13 @@ def cargar_catalogo_perfiles():
 
 def filtrar_participantes(nombres_pedidos):
     """Devuelve (encontrados, no_encontrados) comparando contra las huellas
-    disponibles en voces_perfiles.json, sin importar mayúsculas/acentos."""
+    disponibles en voces_perfiles.json, por conjunto de palabras (sin
+    importar mayúsculas/acentos/orden)."""
     catalogo = cargar_catalogo_perfiles()
-    indice = {_normalizar(nombre): nombre for nombre in catalogo}
+    indice = {_palabras_significativas(nombre): nombre for nombre in catalogo}
     encontrados, no_encontrados = [], []
     for pedido in nombres_pedidos:
-        real = indice.get(_normalizar(pedido))
+        real = indice.get(_palabras_significativas(pedido))
         (encontrados if real else no_encontrados).append(real or pedido)
     return encontrados, no_encontrados
 
@@ -55,6 +65,23 @@ def _escribir_perfiles_filtrados(job_id, nombres_encontrados):
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(subconjunto, f, ensure_ascii=False)
     return ruta
+
+
+def _asignar_puerto_srt():
+    """Primer puerto libre del rango reservado para audio SRT entrante.
+    'Libre' = ningún trabajo srt en estado ejecutando lo está usando."""
+    with conexion() as con, con.cursor() as cur:
+        cur.execute(
+            "SELECT puerto FROM trabajos WHERE fuente='srt' "
+            "AND estado='ejecutando' AND puerto IS NOT NULL")
+        ocupados = {r["puerto"] for r in cur.fetchall()}
+    for puerto in range(settings.srt_puerto_base, settings.srt_puerto_fin + 1):
+        if puerto not in ocupados:
+            return puerto
+    total = settings.srt_puerto_fin - settings.srt_puerto_base + 1
+    raise ValueError(
+        f"No hay puertos SRT disponibles (máximo {total} transmisiones "
+        "simultáneas); espera a que termine otra o sube SRT_PUERTO_FIN.")
 
 
 def _max_sesion_id_actual():
@@ -133,6 +160,10 @@ def _cola_log(log_path, max_chars=4000):
 def crear_trabajo(usuario_id, datos):
     if datos.modelo not in settings.modelos_permitidos:
         raise ValueError(f"modelo inválido: {datos.modelo}")
+    if datos.fuente not in ("youtube", "srt"):
+        raise ValueError(f"fuente inválida: {datos.fuente} (usa youtube o srt)")
+    if datos.fuente == "youtube" and not datos.url:
+        raise ValueError("falta 'url' (requerido con fuente=youtube)")
 
     encontrados, no_encontrados = filtrar_participantes(datos.participantes)
     if not encontrados:
@@ -142,14 +173,23 @@ def crear_trabajo(usuario_id, datos):
 
     job_id = str(uuid.uuid4())
     ruta_perfiles = _escribir_perfiles_filtrados(job_id, encontrados)
-    id_previo = _max_sesion_id_actual()
 
     carpeta = os.path.join(settings.jobs_dir, job_id)
     log_path = os.path.join(carpeta, "salida.log")
     log = open(log_path, "w", encoding="utf-8")
 
+    puerto = passphrase = None
+    if datos.fuente == "srt":
+        url_guardada = datos.url or "Sesión SRT"
+        puerto = _asignar_puerto_srt()
+        passphrase = secrets.token_hex(16)
+    else:
+        url_guardada = datos.url
+
+    id_previo = _max_sesion_id_actual()
+
     comando = [
-        sys.executable, RUTA_SCRIPT, datos.url,
+        sys.executable, RUTA_SCRIPT, url_guardada,
         "--modelo", datos.modelo,
         "--bloque", str(datos.bloque),
         "--db", settings.db_path,
@@ -158,6 +198,8 @@ def crear_trabajo(usuario_id, datos):
         "--umbral-voz", str(datos.umbral_voz),
         "--umbral-cambio-voz", str(datos.umbral_cambio_voz),
     ]
+    if datos.fuente == "srt":
+        comando += ["--puerto-srt", str(puerto), "--srt-passphrase", passphrase]
 
     proc = subprocess.Popen(comando, stdout=log, stderr=subprocess.STDOUT,
                              cwd=os.path.dirname(RUTA_SCRIPT) or ".")
@@ -166,10 +208,11 @@ def crear_trabajo(usuario_id, datos):
         cur.execute(
             "INSERT INTO trabajos (id, usuario_id, url, participantes_pedidos, "
             "participantes_encontrados, participantes_no_encontrados, modelo, "
-            "estado, pid) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (job_id, usuario_id, datos.url, json.dumps(datos.participantes),
+            "fuente, puerto, passphrase, estado, pid) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (job_id, usuario_id, url_guardada, json.dumps(datos.participantes),
              json.dumps(encontrados), json.dumps(no_encontrados), datos.modelo,
-             "ejecutando", proc.pid))
+             datos.fuente, puerto, passphrase, "ejecutando", proc.pid))
 
     with _lock:
         _procesos[job_id] = {"proc": proc, "log": log}
@@ -177,7 +220,7 @@ def crear_trabajo(usuario_id, datos):
     threading.Thread(target=_monitorear, args=(job_id, proc, log_path),
                       daemon=True).start()
     threading.Thread(target=_detectar_sesion_id,
-                      args=(job_id, datos.url, id_previo, log_path),
+                      args=(job_id, url_guardada, id_previo, log_path),
                       daemon=True).start()
 
     return obtener_trabajo(job_id)
@@ -196,6 +239,17 @@ def listar_trabajos(usuario_id=None):
         else:
             cur.execute("SELECT * FROM trabajos WHERE usuario_id = %s "
                         "ORDER BY creado_en DESC", (usuario_id,))
+        return cur.fetchall()
+
+
+def listar_trabajos_srt_activos():
+    """Trabajos con fuente SRT que siguen corriendo — la cola compartida
+    que ve la app de escritorio del operador (cualquier usuario, no solo
+    quien los creó)."""
+    with conexion() as con, con.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM trabajos WHERE fuente='srt' AND estado='ejecutando' "
+            "ORDER BY creado_en")
         return cur.fetchall()
 
 
