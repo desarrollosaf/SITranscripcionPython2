@@ -35,6 +35,11 @@ services:
       # En Linux, a diferencia de Docker Desktop (Mac/Windows), hay que
       # mapear host.docker.internal a mano para llegar al MySQL del host.
       - "host.docker.internal:host-gateway"
+      # En redes con DNS interno restringido (gob.mx), el contenedor puede
+      # no resolver este dominio aunque el propio servidor sí. Default:
+      # su IP pública real; sobreescribe PARLAMENTARIO_IP en tu .env con la
+      # IP interna si tu red la resuelve distinto (como en este servidor).
+      - "parlamentario.congresoedomex.gob.mx:${PARLAMENTARIO_IP:-200.77.147.68}"
     volumes:
       - .:/app
       - whisper-cache:/root/.cache/huggingface
@@ -69,6 +74,7 @@ services:
       - "${REVISOR_PORT:-8756}:8756"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "parlamentario.congresoedomex.gob.mx:${PARLAMENTARIO_IP:-200.77.147.68}"
     volumes:
       - .:/app
       # Mismas caches que "api": el lanzador "Nueva transcripción" de esta
