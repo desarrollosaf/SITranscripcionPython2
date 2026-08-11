@@ -35,11 +35,6 @@ services:
       # En Linux, a diferencia de Docker Desktop (Mac/Windows), hay que
       # mapear host.docker.internal a mano para llegar al MySQL del host.
       - "host.docker.internal:host-gateway"
-      # En redes con DNS interno restringido (gob.mx), el contenedor puede
-      # no resolver este dominio aunque el propio servidor sí. Default:
-      # su IP pública real; sobreescribe PARLAMENTARIO_IP en tu .env con la
-      # IP interna si tu red la resuelve distinto (como en este servidor).
-      - "parlamentario.congresoedomex.gob.mx:${PARLAMENTARIO_IP:-200.77.147.68}"
     volumes:
       - .:/app
       - whisper-cache:/root/.cache/huggingface
@@ -58,6 +53,10 @@ services:
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
       - SRT_PUERTO_BASE=${SRT_PUERTO_BASE:-9000}
       - SRT_PUERTO_FIN=${SRT_PUERTO_FIN:-9009}
+      # URL base del sistema de registro parlamentario. Default: dominio
+      # público. En redes con proxy/DNS interno restringido, apunta directo
+      # al backend interno (ver .env.example) para saltarte el proxy público.
+      - PARLAMENTARIO_API_URL=${PARLAMENTARIO_API_URL:-https://parlamentario.congresoedomex.gob.mx/backend/api/eventos/ultimoseventos}
 
   # Interfaz visual de revisión (revisar.py): la página con la barra
   # lateral, el texto por orador, edición de nombres/texto y resúmenes.
@@ -74,7 +73,6 @@ services:
       - "${REVISOR_PORT:-8756}:8756"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "parlamentario.congresoedomex.gob.mx:${PARLAMENTARIO_IP:-200.77.147.68}"
     volumes:
       - .:/app
       # Mismas caches que "api": el lanzador "Nueva transcripción" de esta
@@ -94,6 +92,7 @@ services:
       - DB_NAME=${DB_NAME:-transcripcion_api}
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - PARLAMENTARIO_API_URL=${PARLAMENTARIO_API_URL:-https://parlamentario.congresoedomex.gob.mx/backend/api/eventos/ultimoseventos}
 
 volumes:
   whisper-cache:
