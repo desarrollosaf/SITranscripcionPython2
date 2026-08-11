@@ -37,7 +37,7 @@ La primera vez que corras el script se descargará automáticamente el modelo de
 Copia la URL de la transmisión en vivo de YouTube y ejecuta:
 
 ```
-python transcribir_en_vivo.py "https://www.youtube.com/watch?v=XXXXXXX"
+python transcribir_en_vivo_c3.py "https://www.youtube.com/watch?v=XXXXXXX"
 ```
 
 Eso es todo. Notas importantes:
@@ -64,14 +64,14 @@ Eso es todo. Notas importantes:
 Ejemplo con más calidad (requiere computadora potente o GPU):
 
 ```
-python transcribir_en_vivo.py "URL" --modelo medium --dispositivo cuda
+python transcribir_en_vivo_c3.py "URL" --modelo medium --dispositivo cuda
 ```
 
 Ejemplo con identificación de voz en vivo (requiere haber corrido antes
 `voz.py` para tener `voces_perfiles.json`):
 
 ```
-python transcribir_en_vivo.py "URL" --voz
+python transcribir_en_vivo_c3.py "URL" --voz
 ```
 
 Con `--voz`, el sistema le saca huella de voz a **cada segmento** transcrito
@@ -210,15 +210,41 @@ directo en tu disco (nada se pierde al parar el contenedor). Los modelos de
 Whisper y de voz se cachean en volúmenes de Docker para no re-descargarlos
 cada vez.
 
-Para correr `revisar.py` u otros scripts sueltos dentro del mismo contenedor:
-
-```
-docker compose run --rm --entrypoint python transcriptor revisar.py
-```
-
 **Nota:** la imagen se construye para CPU. Si tienes GPU NVIDIA y quieres usar
 `--dispositivo cuda`, hay que ajustar la imagen base a una con CUDA y agregar
 `runtime: nvidia` en `docker-compose.yml` (no incluido por defecto).
+
+### Desplegar en tu servidor (clonar y listo)
+
+```
+git clone <este repo> && cd SITranscripcionPython2
+cp .env.example .env        # y llena DB_HOST/DB_USER/DB_PASS/JWT_SECRET reales
+docker compose build
+docker compose up -d api revisor      # NO uses "docker compose up -d" a secas:
+                                       # "transcriptor" es para correr trabajos
+                                       # sueltos (docker compose run), no un
+                                       # servicio permanente — up -d intentaría
+                                       # arrancarlo también y fallaría sin URL.
+docker compose exec api python crear_admin.py --email tu@correo.com
+```
+
+`api` y `revisor` traen `restart: unless-stopped`: si el servidor se reinicia,
+vuelven solos. Persistencia y modelos: ver arriba (`sesiones.db`,
+`voces_perfiles.json`, cachés de Whisper/voz), todo vive en la carpeta del
+proyecto o en volúmenes de Docker — nada se pierde entre despliegues.
+
+### Puertos: qué sale y qué abrir en el firewall
+
+| Puerto | Servicio | Protocolo | ¿Necesitas abrirlo? |
+|---|---|---|---|
+| `8000` (`API_PORT`) | `api` — login, crear trabajos, la app del operador de audio | TCP | Sí, si algo fuera del servidor le habla (el `.exe` del operador, tu otro sistema). Solo interno si todo corre en la misma red. |
+| `8756` (`REVISOR_PORT`) | `revisor` — la interfaz web de revisión | TCP | Sí, para quien vaya a entrar desde su navegador. |
+| `9000`-`9009` (`SRT_PUERTO_BASE`-`SRT_PUERTO_FIN`) | `api` — audio SRT entrante (consola/Dante) | **UDP** | Sí, si vas a usar la captura por SRT — el `.exe` de la consola de audio le habla directo a estos puertos desde otra máquina/red. |
+| `3306` (`DB_PORT`) | Tu MySQL (fuera de este compose) | TCP | Solo si tu MySQL vive en **otro** servidor; si está en la misma máquina (`host.docker.internal`), no hace falta exponerlo a internet. |
+
+Todos los puertos son configurables por variable de entorno en tu `.env` (ver
+`.env.example`) — cámbialos ahí si ya usas esos puertos para otra cosa en el
+servidor, no en `docker-compose.yml`.
 
 ## API para integrarlo con otro sistema (FastAPI + login + MySQL)
 
@@ -441,7 +467,7 @@ José Luis de la Rosa Ibarra
 
 Con este archivo presente:
 
-- `transcribir_en_vivo.py` corrige automáticamente los nombres que detecta: si Whisper escuchó "María Pérez" o "Juan Hernandez", los ajusta al nombre oficial del catálogo.
+- `transcribir_en_vivo_c3.py` corrige automáticamente los nombres que detecta: si Whisper escuchó "María Pérez" o "Juan Hernandez", los ajusta al nombre oficial del catálogo.
 - `revisar.py` te sugiere estos nombres al corregir manualmente.
 
 ## Problemas comunes
@@ -449,7 +475,7 @@ Con este archivo presente:
 - **yt-dlp da error al conectar:** YouTube cambia seguido; actualiza con `pip install -U yt-dlp`.
 - **"ffmpeg no se reconoce":** no está en el PATH; reinstala según la sección de instalación y abre una terminal nueva.
 - **Acentos se ven mal en la consola de Windows:** usa Windows Terminal en lugar del CMD clásico.
-- **"database is locked":** dos programas tocaron la base a la vez (el transcriptor y el portal). Las versiones actuales ya lo resuelven: comparten el archivo esperando su turno. Si lo ves con versiones viejas, actualiza `revisar.py` y `transcribir_en_vivo.py`. Nota: aparecen dos archivos auxiliares junto a `sesiones.db` (`sesiones.db-wal` y `sesiones.db-shm`) — son normales; no los borres mientras algún programa esté abierto.
+- **"database is locked":** dos programas tocaron la base a la vez (el transcriptor y el portal). Las versiones actuales ya lo resuelven: comparten el archivo esperando su turno. Si lo ves con versiones viejas, actualiza `revisar.py` y `transcribir_en_vivo_c3.py`. Nota: aparecen dos archivos auxiliares junto a `sesiones.db` (`sesiones.db-wal` y `sesiones.db-shm`) — son normales; no los borres mientras algún programa esté abierto.
 
 ## Reconocimiento por huella de voz (voz.py)
 

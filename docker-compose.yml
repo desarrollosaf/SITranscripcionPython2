@@ -22,6 +22,7 @@ services:
   api:
     build: .
     image: si-transcripcion:latest
+    restart: unless-stopped
     entrypoint: []
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
@@ -59,6 +60,7 @@ services:
   revisor:
     build: .
     image: si-transcripcion:latest
+    restart: unless-stopped
     entrypoint: []
     command: ["python", "revisar.py", "--host", "0.0.0.0",
               "--puerto", "8756", "--db", "sesiones.db", "--requiere-login",
@@ -69,6 +71,12 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
+      # Mismas caches que "api": el lanzador "Nueva transcripción" de esta
+      # interfaz corre transcribir_en_vivo_c3.py --voz aquí mismo (URL
+      # manual, no por SRT) — sin esto, re-descargaría Whisper/speechbrain
+      # en cada lanzamiento.
+      - whisper-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
     environment:
       # Mismos usuarios/login que el servicio "api" (misma MySQL, mismo
       # JWT_SECRET): un usuario creado con crear_admin.py o POST /usuarios
