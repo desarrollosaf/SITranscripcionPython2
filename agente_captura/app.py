@@ -65,8 +65,13 @@ def guardar_config(datos):
 
 
 def listar_dispositivos_audio():
-    """Corre ffmpeg -list_devices y devuelve los nombres de los
-    dispositivos de audio DirectShow (interfaces USB, canales Dante, etc.)."""
+    """Corre ffmpeg -list_devices y devuelve una lista de (nombre, id) por
+    cada dispositivo de audio DirectShow (interfaces USB, canales Dante,
+    etc.). 'id' es el "Alternative name" (@device_cm_{...}) que ffmpeg
+    imprime junto a cada dispositivo, o None si no lo trae — se usa para
+    ABRIR el dispositivo en vez del nombre visible: en Windows, ffmpeg
+    frecuentemente no puede abrir por nombre si tiene acentos/símbolos
+    ("Could not find audio only device..."), aunque sí lo liste bien."""
     try:
         r = subprocess.run(
             [ruta_ffmpeg(), "-hide_banner", "-list_devices", "true",
@@ -77,28 +82,50 @@ def listar_dispositivos_audio():
         raise RuntimeError(f"No pude ejecutar ffmpeg: {e}")
 
     texto = r.stderr or ""
+    dispositivos = []   # [(nombre, id_alternativo_o_None), ...]
+    pendiente = None
+    en_audio_legacy = False
 
-    # Formato nuevo de ffmpeg: cada dispositivo trae "(audio)"/"(video)"
-    # pegado a la misma línea, sin encabezado de sección — más confiable,
-    # no depende de texto exacto de encabezado.
-    dispositivos = [m.group(1) for m in
-                    re.finditer(r'"([^"]+)"\s*\(audio\)', texto)]
+    def cerrar_pendiente():
+        nonlocal pendiente
+        if pendiente:
+            dispositivos.append((pendiente, None))
+            pendiente = None
 
-    if not dispositivos:
-        # Formato viejo de ffmpeg: encabezado "DirectShow audio devices"
-        # seguido de líneas con solo el nombre entre comillas.
-        en_audio = False
-        for linea in texto.splitlines():
-            if "DirectShow audio devices" in linea:
-                en_audio = True
+    for linea in texto.splitlines():
+        # Formato viejo de ffmpeg: encabezados de sección.
+        if "DirectShow audio devices" in linea:
+            en_audio_legacy = True
+            continue
+        if "DirectShow video devices" in linea:
+            en_audio_legacy = False
+            cerrar_pendiente()
+            continue
+
+        m_alt = re.search(r'Alternative name\s+"([^"]+)"', linea)
+        if m_alt:
+            if pendiente:
+                dispositivos.append((pendiente, m_alt.group(1)))
+                pendiente = None
+            continue
+
+        # Formato nuevo: "(audio)"/"(video)" pegado a la línea.
+        m_nuevo = re.search(r'"([^"]+)"\s*\(audio\)', linea)
+        if m_nuevo:
+            cerrar_pendiente()
+            pendiente = m_nuevo.group(1)
+            continue
+        if re.search(r'"[^"]+"\s*\(video\)', linea):
+            cerrar_pendiente()
+            continue
+
+        if en_audio_legacy:
+            m_legacy = re.search(r'"([^"]+)"', linea)
+            if m_legacy:
+                cerrar_pendiente()
+                pendiente = m_legacy.group(1)
                 continue
-            if "DirectShow video devices" in linea:
-                en_audio = False
-                continue
-            if en_audio:
-                m = re.search(r'"([^"]+)"', linea)
-                if m:
-                    dispositivos.append(m.group(1))
+    cerrar_pendiente()
 
     if not dispositivos:
         # No calzó el parseo (versión/formato distinto de ffmpeg) o de
@@ -151,6 +178,7 @@ class FilaEvento:
         self.evento = evento
         self.proc = None
         self.ruta_log = None
+        self.mapa_dispositivos = {}   # nombre visible -> id alterno (o None)
 
         self.marco = ttk.Frame(parent, padding=6, relief="groove", borderwidth=1)
         self.marco.pack(fill="x", padx=4, pady=3)
@@ -163,11 +191,9 @@ class FilaEvento:
         fila = ttk.Frame(self.marco)
         fila.pack(fill="x", pady=(4, 0))
 
-        self.combo = ttk.Combobox(fila, values=dispositivos, state="readonly",
-                                  width=40)
-        if dispositivos:
-            self.combo.current(0)
+        self.combo = ttk.Combobox(fila, values=[], state="readonly", width=40)
         self.combo.pack(side="left", padx=(0, 8))
+        self.actualizar_dispositivos(dispositivos)
 
         self.boton = ttk.Button(fila, text="Iniciar", command=self._alternar)
         self.boton.pack(side="left")
@@ -180,11 +206,14 @@ class FilaEvento:
         self.boton_log.pack(side="left", padx=8)
 
     def actualizar_dispositivos(self, dispositivos):
+        """dispositivos: lista de (nombre, id_alterno_o_None)."""
+        self.mapa_dispositivos = {nombre: id_alt for nombre, id_alt in dispositivos}
+        nombres = list(self.mapa_dispositivos.keys())
         actual = self.combo.get()
-        self.combo["values"] = dispositivos
-        if actual in dispositivos:
+        self.combo["values"] = nombres
+        if actual in nombres:
             self.combo.set(actual)
-        elif dispositivos and not self.combo.get():
+        elif nombres and not self.combo.get():
             self.combo.current(0)
 
     def _alternar(self):
@@ -199,13 +228,17 @@ class FilaEvento:
             messagebox.showwarning("Falta dispositivo",
                                    "Elige un dispositivo de audio primero.")
             return
+        # Preferir el id alterno (@device_cm_{...}) sobre el nombre visible:
+        # en Windows, ffmpeg suele fallar al abrir por nombre si tiene
+        # acentos/símbolos, aunque lo liste bien.
+        referencia = self.mapa_dispositivos.get(dispositivo) or dispositivo
         host = self.app.cliente.host
         puerto = self.evento["puerto"]
         passphrase = self.evento["passphrase"]
         destino = f"srt://{host}:{puerto}?mode=caller&passphrase={passphrase}"
         cmd = [
             ruta_ffmpeg(), "-hide_banner", "-loglevel", "warning",
-            "-f", "dshow", "-i", f"audio={dispositivo}",
+            "-f", "dshow", "-i", f"audio={referencia}",
             # AAC, no PCM crudo: MPEG-TS no tiene un tipo de stream estándar
             # para PCM, así que el lado que recibe no lo reconoce al leer.
             "-ac", "1", "-ar", "16000", "-acodec", "aac", "-b:a", "128k",
