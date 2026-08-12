@@ -27,10 +27,12 @@ import os
 import re
 import shutil
 import sqlite3
+import struct
 import subprocess
 import sys
 import time
 import unicodedata
+import wave
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -810,6 +812,47 @@ def indice_de_bloque(ruta):
     return int(m.group(1)) if m else 0
 
 
+def _ruta_audio_esteno(sesion_id):
+    """Dónde el módulo estenográfico de revisar.py espera encontrar el audio
+    combinado de una sesión (mismo cálculo que _esteno_dir_audio() ahí):
+    ESTENO_AUDIO_DIR si está definida, si no 'audio/' junto a este script.
+    Como los tres servicios del compose montan el mismo directorio en /app,
+    revisar.py lo encuentra solo — nadie tiene que 'vincular audio' a mano."""
+    base = os.environ.get("ESTENO_AUDIO_DIR", "").strip()
+    if not base:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, f"sesion_{sesion_id}.wav")
+
+
+def agregar_bloque_a_audio_esteno(ruta_bloque, sesion_id):
+    """Pega el bloque recién transcrito al final del WAV combinado de la
+    sesión, para que el módulo estenográfico pueda ir reproduciendo el
+    audio según llega, sin esperar a que la sesión termine. Todos los
+    bloques comparten formato (mono, 16 kHz, PCM), así que se pueden
+    concatenar en crudo; solo se reescribe la cabecera con el tamaño nuevo
+    (offsets 4 y 40 del WAV canónico de 44 bytes), nunca el audio ya
+    escrito — así el costo por bloque no crece con la duración de la
+    sesión."""
+    combinado = _ruta_audio_esteno(sesion_id)
+    with wave.open(ruta_bloque, "rb") as wb:
+        datos = wb.readframes(wb.getnframes())
+        params = wb.getparams()
+    if not os.path.isfile(combinado):
+        with wave.open(combinado, "wb") as wc:
+            wc.setparams(params)
+            wc.writeframes(datos)
+        return
+    with open(combinado, "r+b") as f:
+        f.seek(0, os.SEEK_END)
+        f.write(datos)
+        tam = f.tell()
+        f.seek(4)
+        f.write(struct.pack("<I", tam - 8))
+        f.seek(40)
+        f.write(struct.pack("<I", tam - 44))
+
+
 # ---------------------------------------------------------------------------
 # Base de datos
 # ---------------------------------------------------------------------------
@@ -1501,7 +1544,16 @@ def main():
         estado["contexto"] = (estado["contexto"] + " "
                               + " ".join(texto_bloque))[-300:]
         con.commit()
-        if not args.conservar_audio:
+        if args.conservar_audio:
+            try:
+                agregar_bloque_a_audio_esteno(ruta, sesion_id)
+            except Exception as e:
+                # Nunca debe tumbar la transcripción por esto: en el peor
+                # caso el módulo estenográfico se queda sin audio en vivo,
+                # pero el texto sigue avanzando normal.
+                print(f"[audio-esteno] No se pudo actualizar el audio "
+                      f"combinado: {e}")
+        else:
             try:
                 os.remove(ruta)
             except OSError:

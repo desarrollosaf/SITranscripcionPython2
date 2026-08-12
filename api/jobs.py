@@ -206,6 +206,10 @@ def crear_trabajo(usuario_id, datos, evento_id=None):
         "--perfiles", ruta_perfiles,
         "--umbral-voz", str(datos.umbral_voz),
         "--umbral-cambio-voz", str(datos.umbral_cambio_voz),
+        # Para que el módulo estenográfico de revisar.py tenga audio que
+        # reproducir sin que nadie tenga que vincularlo a mano (se va
+        # armando solo, sesion_<id>.wav, mientras la sesión sigue en vivo).
+        "--conservar-audio",
     ]
     if datos.fuente == "srt":
         comando += ["--puerto-srt", str(puerto), "--srt-passphrase", passphrase]

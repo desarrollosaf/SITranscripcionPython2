@@ -9,6 +9,7 @@ muestras_voz/
 muestras_voz2/
 modelos_voz/
 sesiones_en_vivo/
+audio/
 sesiones.db
 sesiones.db-wal
 sesiones.db-shm

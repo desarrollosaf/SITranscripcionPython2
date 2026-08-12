@@ -10,6 +10,9 @@ modelos_voz/
 sesiones_en_vivo/
 jobs_data/
 
+# Audio combinado por sesión para el módulo estenográfico (se arma solo)
+audio/
+
 # Base de datos (crece con cada sesión; no es código)
 sesiones.db
 sesiones.db-wal

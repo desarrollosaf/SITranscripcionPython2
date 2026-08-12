@@ -421,7 +421,7 @@ main{padding:26px 30px 90px;max-width:820px}
   </div>
   <div class="grupo">
     <span class="grupo-tit">Colaborar</span>
-    <a id="lnkEsteno" class="accion" href="/esteno?admin=1"
+    <a id="lnkEsteno" class="accion" href="/esteno"
        title="Reparte la sesión en tramos entre varios correctores">👥 Módulo estenográfico</a>
   </div>
   <label class="vivo" title="Sigue la transcripción casi en tiempo real (se actualiza cada ~2.5 s y se pausa mientras editas). Desmárcala para pausar.">
@@ -962,7 +962,7 @@ async function cargarSesion(id, opts){
          : '')
     : '';
   const lnkEsteno = $('#lnkEsteno');
-  if(lnkEsteno) lnkEsteno.href = s.id ? ('/esteno?sesion='+s.id+'&admin=1') : '/esteno?admin=1';
+  if(lnkEsteno) lnkEsteno.href = s.id ? ('/esteno?sesion='+s.id) : '/esteno';
   opcionesOradores(); pintarLateral(); pintarTranscripcion();
   return true;    // se redibujó
 }
@@ -1501,8 +1501,9 @@ const app = $('#app');
 const params = new URLSearchParams(location.search);
 const S = {
   sesion: parseInt(params.get('sesion')||'0',10) || 0,
-  corrector: (params.get('corrector')||'').trim(),
-  esAdmin: params.get('admin')==='1' || !(params.get('corrector')||'').trim(),
+  // corrector/esAdmin ya NO salen de la URL: se resuelven en iniciar()
+  // contra /api/yo, con la cuenta con la que de verdad iniciaste sesión.
+  corrector: null, esAdmin: false, usuarios: [],
   miSlot: null, config:null, bloques:[], total:0, audio:false, sesionInfo:null,
   abierto:null, segmentos:[], timerEstado:null, timerLatido:null, au:null, nombres:[],
 };
@@ -1541,54 +1542,55 @@ async function cargarEstado(){
 async function vistaAdmin(){
   $('#rol').className='rol admin'; $('#rol').textContent='Administrador';
   let sesiones=[]; try{ sesiones=await api('/api/sesiones'); }catch(e){}
+  try{ S.usuarios = await api('/api/usuarios'); }catch(e){ S.usuarios = []; }
   const opts = '<option value="0">— Elige una sesión —</option>'+
     sesiones.map(s=>'<option value="'+s.id+'"'+(s.id===S.sesion?' selected':'')+'>#'+s.id+' — '+esc((s.titulo||'').slice(0,60))+'</option>').join('');
   let html = '<div class="tarjeta"><h2>Sesión</h2>'+
     '<div class="fila"><label class="campo">Sesión a preparar<select id="selSes">'+opts+'</select></label></div></div>';
   if(S.sesion){
     const cfg=S.config||{};
-    const nombres=(cfg.nombres||[]).join('\\n');
     html += '<div class="tarjeta"><h2>Plan de turnos</h2>'+
       '<p class="ayuda">Define cuántos correctores trabajarán y de cuántos minutos será cada bloque. '+
       'La duración es un <b>mínimo aproximado</b>: si al cumplirse el tiempo hay una intervención en curso, '+
       'el bloque se extiende hasta que ese orador termine (no se parten intervenciones). '+
       'Los bloques se reparten en rotación (Corrector 1: 1º, luego cada N; y así). '+
-      'Opcional: escribe los nombres (uno por línea, en orden) para generar sus enlaces.</p>'+
+      'Asigna cada turno a una cuenta real — si a alguien le falta, créala primero en '+
+      '"Usuarios" desde la pantalla principal.</p>'+
       '<div class="fila">'+
         '<label class="campo">Nº de correctores<input id="cNum" type="number" min="1" max="50" value="'+(cfg.num_correctores||2)+'" style="width:110px"></label>'+
         '<label class="campo">Minutos por bloque<input id="cMin" type="number" min="1" max="120" value="'+((cfg.bloque_seg||600)/60)+'" style="width:130px"></label>'+
-        '<label class="campo">Nombres de correctores (opcional)<textarea id="cNom" placeholder="Ana&#10;Beto&#10;Carla">'+esc(nombres)+'</textarea></label>'+
-        '<button class="btn pri" id="bGen">Generar / actualizar plan</button>'+
-      '</div></div>';
+      '</div>'+
+      '<div id="filasCorrectores" class="fila" style="margin-top:6px"></div>'+
+      '<button class="btn pri" id="bGen" style="margin-top:10px">Generar / actualizar plan</button></div>';
 
     // Audio
     html += '<div class="tarjeta"><h2>Audio de la sesión</h2>'+
-      '<p class="ayuda">El audio se busca solo en la carpeta <code>audio/</code> como <code>sesion_'+S.sesion+'.mp3</code> (u otra extensión). '+
-      'Si está en otro lugar, pega aquí la ruta completa.</p>'+
+      '<p class="ayuda">Si la transcripción se lanzó con "conservar audio" activo, el audio '+
+      'se va enlazando solo conforme llega — no hace falta hacer nada aquí. Esto es solo '+
+      'para cuando el audio vive en otro lado y quieres apuntarlo a mano.</p>'+
       '<div class="fila"><span class="pill-audio '+(S.audio?'si':'no')+'">'+(S.audio?'Audio detectado':'Sin audio')+'</span>'+
-      '<label class="campo" style="flex:1 1 320px">Ruta del audio<input id="aRuta" type="text" placeholder="C:\\\\ruta\\\\al\\\\audio.mp3 o /home/…/audio.mp3"></label>'+
+      '<label class="campo" style="flex:1 1 320px">Ruta del audio (opcional)<input id="aRuta" type="text" placeholder="C:\\\\ruta\\\\al\\\\audio.mp3 o /home/…/audio.mp3"></label>'+
       '<button class="btn" id="bAudio">Vincular audio</button></div></div>';
 
     // Progreso + plan (en su propio contenedor, para refrescar SOLO esto)
     if(S.config){
       html += '<div class="tarjeta"><h2>Avance</h2>'+
         '<div id="panelPlan">'+panelPlanHTML()+'</div></div>';
-      if((S.config.nombres||[]).length){
-        html += '<div class="tarjeta"><h2>Enlaces para los correctores</h2>'+
-          '<p class="ayuda">Comparte a cada quien su enlace. Cada uno verá sus bloques asignados.</p>'+
-          S.config.nombres.map(n=>{
-            const url=location.origin+'/esteno?sesion='+S.sesion+'&corrector='+encodeURIComponent(n);
-            return '<div class="enlace-corr"><strong>'+esc(n)+':</strong> <code>'+esc(url)+'</code>'+
-              '<button class="btn chico" data-url="'+esc(url)+'">Copiar</button></div>';
-          }).join('')+'</div>';
-      }
+      html += '<div class="tarjeta"><h2>Enlace para compartir</h2>'+
+        '<p class="ayuda">El mismo enlace sirve para todos — cada quien entra con su propia '+
+        'cuenta y ve sus turnos automáticamente.</p>'+
+        '<div class="enlace-corr"><code>'+esc(location.origin+'/esteno?sesion='+S.sesion)+'</code>'+
+        '<button class="btn chico" data-url="'+esc(location.origin+'/esteno?sesion='+S.sesion)+'">Copiar</button></div></div>';
     }
   }
   app.innerHTML=html;
 
-  $('#selSes').onchange = e => { location.search='?sesion='+e.target.value+'&admin=1'; };
+  $('#selSes').onchange = e => { location.search='?sesion='+e.target.value; };
+  pintarFilasCorrectores();
+  if($('#cNum')) $('#cNum').oninput = pintarFilasCorrectores;
   if($('#bGen')) $('#bGen').onclick = async ()=>{
-    const nombres=$('#cNom').value.split('\\n').map(x=>x.trim()).filter(Boolean);
+    const nombres = Array.from(document.querySelectorAll('#filasCorrectores select[data-slot]'))
+      .map(s=>s.value);
     try{
       const r=await api('/api/esteno/configurar',{sesion_id:S.sesion,
         num_correctores:parseInt($('#cNum').value,10)||1,
@@ -1606,6 +1608,25 @@ async function vistaAdmin(){
   app.querySelectorAll('button[data-url]').forEach(b=> b.onclick=()=>{
     navigator.clipboard.writeText(b.dataset.url); avisar('Enlace copiado.'); });
   cablearReasignar();
+}
+// Una fila por turno, cada una con un <select> de cuentas reales (no texto
+// libre) — así el plan queda atado a usuarios que de verdad pueden entrar.
+function pintarFilasCorrectores(){
+  const cont = $('#filasCorrectores'); if(!cont) return;
+  const num = parseInt($('#cNum').value, 10) || 1;
+  const actuales = (S.config && S.config.nombres) || [];
+  const opciones = '<option value="">— sin asignar —</option>' +
+    (S.usuarios||[]).map(u=>'<option value="'+esc(u.email)+'">'+esc(u.email)
+      +(u.es_admin?' (admin)':'')+'</option>').join('');
+  let h='';
+  for(let i=0;i<num;i++){
+    h += '<label class="campo">Turno '+(i+1)+'<select data-slot="'+i+'">'+opciones+'</select></label>';
+  }
+  cont.innerHTML = h;
+  cont.querySelectorAll('select[data-slot]').forEach(sel=>{
+    const i = parseInt(sel.dataset.slot, 10);
+    if(actuales[i]) sel.value = actuales[i];
+  });
 }
 function panelPlanHTML(){
   const pr=S.progreso||{terminados:0,total:0};
@@ -1652,8 +1673,8 @@ function vistaCorrector(){
   let selSlot='';
   if(S.miSlot===null){
     let o=''; for(let i=0;i<S.config.num_correctores;i++) o+='<option value="'+i+'">'+esc(nombreSlot(i))+'</option>';
-    selSlot='<div class="tarjeta"><h2>¿Cuál eres?</h2><p class="ayuda">Tu nombre no está en la lista, elige tu turno para ver tus bloques.</p>'+
-      '<div class="fila"><label class="campo">Soy<select id="miSlot">'+o+'</select></label><button class="btn pri" id="bSlot">Confirmar</button></div></div>';
+    selSlot='<div class="tarjeta"><h2>¿Qué turno tienes?</h2><p class="ayuda">El administrador todavía no te asignó un turno con tu cuenta ('+esc(S.corrector||'')+'); elige cuál te toca para ver primero tus bloques (igual puedes ayudar en cualquier otro).</p>'+
+      '<div class="fila"><label class="campo">Mi turno<select id="miSlot">'+o+'</select></label><button class="btn pri" id="bSlot">Confirmar</button></div></div>';
   }
   const mios = S.miSlot===null? [] : S.bloques.filter(b=>b.slot===S.miSlot);
   const otros = S.miSlot===null? S.bloques : S.bloques.filter(b=>b.slot!==S.miSlot);
@@ -1923,6 +1944,15 @@ function iniciarPoll(){
 function detenerPoll(){ clearInterval(S.timerEstado); S.timerEstado=null; }
 
 async function iniciar(){
+  // Quién eres y si eres admin lo dice el login, no la URL.
+  try{
+    const yo = await api('/api/yo');
+    S.corrector = yo.email; S.esAdmin = !!yo.es_admin;
+  }catch(e){
+    app.innerHTML = '<div class="tarjeta"><h2>No se pudo verificar tu sesión</h2>'
+      + '<p class="ayuda">Vuelve a <a href="/login">iniciar sesión</a>.</p></div>';
+    return;
+  }
   if(!S.sesion && !S.esAdmin){ app.innerHTML='<div class="tarjeta"><h2>Falta la sesión</h2><p class="ayuda">Abre este módulo con un enlace que incluya la sesión.</p></div>'; return; }
   if(S.esAdmin){
     try{ if(S.sesion) await cargarEstado(); }catch(e){ avisar(e.message); }
@@ -3312,6 +3342,9 @@ class Manejador(BaseHTTPRequestHandler):
             pass   # el navegador cambió de rango o cerró: normal con audio
 
     def _esteno_configurar(self, con, datos):
+        if not self._usuario_actual_admin():
+            return self._responder(
+                {"error": "Requiere permisos de administrador"}, codigo=403)
         sid = int(datos.get("sesion_id", 0) or 0)
         if not sid:
             return self._responder({"error": "falta sesión"}, codigo=400)
@@ -3341,6 +3374,9 @@ class Manejador(BaseHTTPRequestHandler):
         self._responder({"ok": True, "bloques": n, "reinicio": reset})
 
     def _esteno_reasignar(self, con, datos):
+        if not self._usuario_actual_admin():
+            return self._responder(
+                {"error": "Requiere permisos de administrador"}, codigo=403)
         sid = int(datos.get("sesion_id", 0) or 0)
         indice = int(datos.get("indice", -1))
         slot = int(datos.get("slot", 0))
@@ -3354,7 +3390,7 @@ class Manejador(BaseHTTPRequestHandler):
     def _esteno_tomar(self, con, datos):
         sid = int(datos.get("sesion_id", 0) or 0)
         indice = int(datos.get("indice", -1))
-        corrector = (datos.get("corrector") or "").strip() or "anónimo"
+        corrector = self._usuario_actual_email() or "desconocido"
         if not sid or indice < 0:
             return self._responder({"error": "faltan datos"}, codigo=400)
         b = con.execute("SELECT * FROM esteno_bloques WHERE sesion_id=? "
@@ -3408,7 +3444,7 @@ class Manejador(BaseHTTPRequestHandler):
     def _esteno_latido(self, con, datos):
         sid = int(datos.get("sesion_id", 0) or 0)
         indice = int(datos.get("indice", -1))
-        corrector = (datos.get("corrector") or "").strip()
+        corrector = self._usuario_actual_email() or "desconocido"
         ahora = datetime.now().isoformat(timespec="seconds")
         con.execute("UPDATE esteno_bloques SET tomado_en=? WHERE sesion_id=? "
                     "AND indice=? AND tomado_por=? AND estado='editando'",
@@ -3419,7 +3455,7 @@ class Manejador(BaseHTTPRequestHandler):
     def _esteno_soltar(self, con, datos):
         sid = int(datos.get("sesion_id", 0) or 0)
         indice = int(datos.get("indice", -1))
-        corrector = (datos.get("corrector") or "").strip()
+        corrector = self._usuario_actual_email() or "desconocido"
         con.execute("UPDATE esteno_bloques SET estado='pendiente', "
                     "tomado_por=NULL, tomado_en=NULL WHERE sesion_id=? "
                     "AND indice=? AND tomado_por=? AND estado='editando'",
@@ -3430,7 +3466,7 @@ class Manejador(BaseHTTPRequestHandler):
     def _esteno_guardar(self, con, datos):
         sid = int(datos.get("sesion_id", 0) or 0)
         indice = int(datos.get("indice", -1))
-        corrector = (datos.get("corrector") or "").strip() or "anónimo"
+        corrector = self._usuario_actual_email() or "desconocido"
         terminar = bool(datos.get("terminar"))
         segmentos = datos.get("segmentos") or []
         if not sid or indice < 0:
@@ -3487,6 +3523,9 @@ class Manejador(BaseHTTPRequestHandler):
                          "terminado": bool(terminar)})
 
     def _esteno_audio_ruta(self, con, datos):
+        if not self._usuario_actual_admin():
+            return self._responder(
+                {"error": "Requiere permisos de administrador"}, codigo=403)
         sid = int(datos.get("sesion_id", 0) or 0)
         ruta = (datos.get("ruta") or "").strip()
         if not sid:
@@ -3501,6 +3540,34 @@ class Manejador(BaseHTTPRequestHandler):
         m = re.search(rf"{COOKIE_SESION}=([^;]+)",
                       self.headers.get("Cookie", ""))
         return m.group(1) if m else None
+
+    def _usuario_actual_email(self):
+        """Email de la cuenta autenticada (según la cookie de sesión), o
+        None si no se pudo determinar. Es la fuente de verdad de 'quién es'
+        para el módulo estenográfico — ya no se confía en nada que mande el
+        cliente. En modo sin --requiere-login no hay cuentas reales; se usa
+        un identificador fijo (no hay más de un operador local a la vez)."""
+        if not self.requiere_login:
+            return "operador-local"
+        token = self._token_cookie()
+        if not token:
+            return None
+        try:
+            payload = _jwt.decode(token, _jwt_secret, algorithms=[_jwt_algoritmo])
+        except Exception:
+            return None
+        return payload.get("sub")
+
+    def _usuario_actual_admin(self):
+        """True si la cuenta autenticada es administrador. En modo sin
+        --requiere-login no hay control de acceso que aplicar."""
+        if not self.requiere_login:
+            return True
+        email = self._usuario_actual_email()
+        if not email:
+            return False
+        usuario = _obtener_usuario(email)
+        return bool(usuario and usuario["es_admin"])
 
     def _llamar_api(self, metodo, ruta, cuerpo=None):
         """Reenvía una petición a la API (api/) usando el mismo token de
@@ -3598,6 +3665,12 @@ class Manejador(BaseHTTPRequestHandler):
             return self._cerrar_sesion()
         if not self._usuario_autenticado():
             return self._redirigir_login()
+        if p.path == "/api/yo":
+            # Identidad real de la sesión actual — el módulo estenográfico
+            # la usa para saber quién eres sin pedírtelo por URL/formulario.
+            return self._responder({
+                "email": self._usuario_actual_email(),
+                "es_admin": self._usuario_actual_admin()})
         if p.path in ("/", "/index.html"):
             pagina = PAGINA.replace(
                 "__REQUIERE_LOGIN__", "true" if self.requiere_login else "false")
