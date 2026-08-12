@@ -76,19 +76,29 @@ def listar_dispositivos_audio():
         raise RuntimeError(f"No pude ejecutar ffmpeg: {e}")
 
     texto = r.stderr or ""
-    en_audio = False
-    dispositivos = []
-    for linea in texto.splitlines():
-        if "DirectShow audio devices" in linea:
-            en_audio = True
-            continue
-        if "DirectShow video devices" in linea:
-            en_audio = False
-            continue
-        if en_audio:
-            m = re.search(r'"([^"]+)"', linea)
-            if m:
-                dispositivos.append(m.group(1))
+
+    # Formato nuevo de ffmpeg: cada dispositivo trae "(audio)"/"(video)"
+    # pegado a la misma línea, sin encabezado de sección — más confiable,
+    # no depende de texto exacto de encabezado.
+    dispositivos = [m.group(1) for m in
+                    re.finditer(r'"([^"]+)"\s*\(audio\)', texto)]
+
+    if not dispositivos:
+        # Formato viejo de ffmpeg: encabezado "DirectShow audio devices"
+        # seguido de líneas con solo el nombre entre comillas.
+        en_audio = False
+        for linea in texto.splitlines():
+            if "DirectShow audio devices" in linea:
+                en_audio = True
+                continue
+            if "DirectShow video devices" in linea:
+                en_audio = False
+                continue
+            if en_audio:
+                m = re.search(r'"([^"]+)"', linea)
+                if m:
+                    dispositivos.append(m.group(1))
+
     if not dispositivos:
         # No calzó el parseo (versión/formato distinto de ffmpeg) o de
         # verdad no hay dispositivos — mostramos la salida cruda para
