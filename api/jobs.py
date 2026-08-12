@@ -251,6 +251,21 @@ def listar_trabajos(usuario_id=None):
         return cur.fetchall()
 
 
+def limpiar_trabajos_huerfanos():
+    """Al arrancar la API, _procesos siempre está vacío — así que cualquier
+    trabajo que la base diga 'ejecutando'/'deteniendo' en ese momento es
+    forzosamente un fantasma de un reinicio anterior (su proceso real ya no
+    existe). Se cierran solos para no bloquear puertos SRT ni confundir al
+    operador de audio o el panel de revisar.py."""
+    with conexion() as con, con.cursor() as cur:
+        cur.execute(
+            "UPDATE trabajos SET estado='detenido', "
+            "error='Proceso perdido (la API se reinició); cerrado "
+            "automáticamente al arrancar.' "
+            "WHERE estado IN ('ejecutando', 'deteniendo')")
+        return cur.rowcount
+
+
 def listar_trabajos_srt_activos():
     """Trabajos con fuente SRT que siguen corriendo — la cola compartida
     que ve la app de escritorio del operador (cualquier usuario, no solo
@@ -265,10 +280,22 @@ def listar_trabajos_srt_activos():
 def detener_trabajo(job_id):
     with _lock:
         entrada = _procesos.get(job_id)
-    if entrada is None:
+    if entrada is not None:
+        _actualizar_trabajo(job_id, estado="deteniendo")
+        entrada["proc"].send_signal(signal.SIGINT)
+        return
+
+    # No hay proceso en memoria — normalmente porque el contenedor de la
+    # API se reinició después de crear este trabajo (el proceso real ya no
+    # existe, pero nadie actualizó su estado). Si la base todavía lo marca
+    # como activo, es un "fantasma": lo cerramos a mano en vez de fallar.
+    fila = obtener_trabajo(job_id)
+    if not fila or fila["estado"] not in ("ejecutando", "deteniendo"):
         raise ValueError("El trabajo no está corriendo (ya terminó o no existe)")
-    _actualizar_trabajo(job_id, estado="deteniendo")
-    entrada["proc"].send_signal(signal.SIGINT)
+    _actualizar_trabajo(
+        job_id, estado="detenido",
+        error="Proceso perdido (el contenedor de la API se reinició "
+              "mientras corría); marcado como detenido manualmente.")
 
 
 def obtener_participaciones(sesion_id):
