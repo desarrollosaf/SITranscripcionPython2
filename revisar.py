@@ -25,6 +25,7 @@ import math
 import mimetypes
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -490,6 +491,30 @@ main{padding:26px 30px 90px;max-width:820px}
     de la lista del operador de audio (el .exe).</p>
     <button id="btnRefrescarTrabajosApi" class="accion">🔄 Actualizar</button>
     <div id="listaTrabajosApi"></div>
+  </div>
+</details>
+<details class="lanzador oculto" id="panelUsuarios">
+  <summary>Usuarios (login del agente de captura / correctores)</summary>
+  <div class="cuerpo-lan">
+    <p class="nota-lan">Crea aquí la cuenta que usará el operador para
+    entrar al agente de captura (.exe) o un corrector para entrar al
+    módulo estenográfico. La contraseña se genera sola y solo se muestra
+    una vez — cópiala antes de cerrar el aviso, después no se puede
+    recuperar (solo crear una nueva).</p>
+    <label class="campo">Email (será el usuario para iniciar sesión)
+      <input id="nuEmail" type="email" placeholder="operador1@congreso.local">
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+      <input type="checkbox" id="nuEsAdmin"> Es administrador (puede crear
+      trabajos, sesiones y otros usuarios — no marcar para el agente de
+      captura ni correctores)
+    </label>
+    <button id="btnCrearUsuario" class="accion primario">Crear usuario</button>
+    <div id="nuevaCredencial" class="oculto" style="margin-top:10px;padding:10px;
+         border:1px solid var(--linea);border-radius:8px;background:var(--fondo-suave,#f6f6f6)">
+    </div>
+    <button id="btnRefrescarUsuarios" class="accion" style="margin-top:10px">🔄 Actualizar lista</button>
+    <div id="listaUsuarios"></div>
   </div>
 </details>
 <div id="meta"></div>
@@ -1290,6 +1315,52 @@ async function cargarTrabajosApi(){
 }
 $('#btnRefrescarTrabajosApi').onclick = cargarTrabajosApi;
 cargarTrabajosApi();
+
+async function cargarUsuarios(){
+  const r = await api('/api/usuarios');
+  if(r.error){
+    // No es admin (o la API no respondió): el panel se queda oculto,
+    // no tiene caso mostrarlo a quien no lo puede usar.
+    $('#panelUsuarios').classList.add('oculto');
+    return;
+  }
+  $('#panelUsuarios').classList.remove('oculto');
+  const cont = $('#listaUsuarios');
+  cont.innerHTML = !r.length
+    ? '<p class="nota-lan">Aún no hay usuarios.</p>'
+    : '<table style="width:100%;font-size:13px;margin-top:8px">'
+      + r.map(u => '<tr><td style="padding:3px 6px 3px 0">' + esc(u.email)
+        + '</td><td style="padding:3px 0;color:var(--tenue,#666)">'
+        + (u.es_admin ? 'administrador' : 'operador') + '</td></tr>').join('')
+      + '</table>';
+}
+$('#btnRefrescarUsuarios').onclick = cargarUsuarios;
+$('#btnCrearUsuario').onclick = async () => {
+  const email = $('#nuEmail').value.trim();
+  if(!email) return avisar('Escribe un email.');
+  const boton = $('#btnCrearUsuario');
+  boton.disabled = true;
+  try{
+    const r = await api('/api/usuarios',
+      {email, es_admin: $('#nuEsAdmin').checked});
+    if(r.error){
+      avisar(typeof r.error === 'string' ? r.error : JSON.stringify(r.error));
+      return;
+    }
+    $('#nuevaCredencial').classList.remove('oculto');
+    $('#nuevaCredencial').innerHTML =
+      '<strong>Cuenta creada.</strong> Copia esta contraseña ahora — no '
+      + 'se vuelve a mostrar (solo puedes crear una nueva si se pierde):<br>'
+      + 'Usuario: <code>' + esc(r.email) + '</code><br>'
+      + 'Contraseña: <code style="font-size:15px">' + esc(r.password) + '</code>';
+    $('#nuEmail').value = '';
+    $('#nuEsAdmin').checked = false;
+    cargarUsuarios();
+  } finally {
+    boton.disabled = false;
+  }
+};
+cargarUsuarios();
 
 iniciar();
 cargarLanzador();
@@ -2196,6 +2267,14 @@ def _fecha_legible(valor):
 
 def _campo(fila, nombre, defecto=None):
     return fila[nombre] if nombre in fila.keys() else defecto
+
+
+def _generar_password_aleatoria(longitud=10):
+    """Contraseña al azar para cuentas de operador (agente de captura,
+    correctores): sin 0/O ni 1/l/I, para que se pueda copiar o dictar por
+    teléfono sin confusiones."""
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alfabeto) for _ in range(longitud))
 
 
 # ===========================================================================
@@ -3481,6 +3560,36 @@ class Manejador(BaseHTTPRequestHandler):
             return self._responder({"error": err["error"]}, codigo=err["codigo"])
         return self._responder(resultado)
 
+    def _listar_usuarios(self):
+        """Cuentas existentes (operador de audio, correctores, admins). Solo
+        responde si quien llama es admin: lo decide la API (usuario_admin_actual),
+        no aquí — así el panel se puede ocultar en el front sin duplicar lógica
+        de permisos."""
+        resultado, err = self._llamar_api("GET", "/usuarios")
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder(resultado)
+
+    def _crear_usuario(self, datos):
+        """Crea una cuenta (típicamente para el agente de captura .exe o un
+        corrector del módulo estenográfico) con una contraseña generada aquí
+        mismo, para poder mostrarla una sola vez al admin que la está creando
+        (la API solo guarda el hash; la contraseña en claro no se puede
+        recuperar después)."""
+        email = (datos.get("email") or "").strip().lower()
+        if not email:
+            return self._responder({"error": "Falta el email"}, codigo=400)
+        es_admin = bool(datos.get("es_admin"))
+        password = _generar_password_aleatoria()
+        resultado, err = self._llamar_api(
+            "POST", "/usuarios",
+            {"email": email, "password": password, "es_admin": es_admin})
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder({"ok": True, "email": resultado["email"],
+                                "password": password,
+                                "es_admin": resultado["es_admin"]})
+
     def do_GET(self):
         p = urlparse(self.path)
         if p.path == "/login":
@@ -3594,6 +3703,8 @@ class Manejador(BaseHTTPRequestHandler):
             # Trabajos creados vía la API (fuente youtube/srt) — para verlos
             # y poder detenerlos desde aquí mismo, sin usar /docs.
             self._listar_trabajos_api()
+        elif p.path == "/api/usuarios":
+            self._listar_usuarios()
         elif p.path == "/api/exportar_word":
             q = parse_qs(p.query)
             try:
@@ -3825,6 +3936,8 @@ class Manejador(BaseHTTPRequestHandler):
             return self._crear_transcripcion_evento(datos)
         if p.path == "/api/trabajos_api/detener":
             return self._detener_trabajo_api(datos.get("id"))
+        if p.path == "/api/usuarios":
+            return self._crear_usuario(datos)
 
         con = self._db()
         try:
