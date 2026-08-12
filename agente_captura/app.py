@@ -89,6 +89,14 @@ def listar_dispositivos_audio():
             m = re.search(r'"([^"]+)"', linea)
             if m:
                 dispositivos.append(m.group(1))
+    if not dispositivos:
+        # No calzó el parseo (versión/formato distinto de ffmpeg) o de
+        # verdad no hay dispositivos — mostramos la salida cruda para
+        # poder diagnosticarlo en vez de dejar el desplegable vacío
+        # y en silencio.
+        raise RuntimeError(
+            "No detecté ningún dispositivo de audio. Salida de ffmpeg:\n\n"
+            + (texto[-1500:] if texto else "(sin salida)"))
     return dispositivos
 
 
