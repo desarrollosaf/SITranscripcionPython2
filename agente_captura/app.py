@@ -20,9 +20,10 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, scrolledtext, ttk
 from urllib.parse import urlparse
 
 import requests
@@ -149,6 +150,7 @@ class FilaEvento:
         self.app = app
         self.evento = evento
         self.proc = None
+        self.ruta_log = None
 
         self.marco = ttk.Frame(parent, padding=6, relief="groove", borderwidth=1)
         self.marco.pack(fill="x", padx=4, pady=3)
@@ -172,6 +174,10 @@ class FilaEvento:
 
         self.estado_var = tk.StringVar(value="⚪ Detenido")
         ttk.Label(fila, textvariable=self.estado_var).pack(side="left", padx=8)
+
+        self.boton_log = ttk.Button(fila, text="Ver registro",
+                                    command=self._ver_registro, state="disabled")
+        self.boton_log.pack(side="left", padx=8)
 
     def actualizar_dispositivos(self, dispositivos):
         actual = self.combo.get()
@@ -205,14 +211,22 @@ class FilaEvento:
             "-ac", "1", "-ar", "16000", "-acodec", "aac", "-b:a", "128k",
             "-f", "mpegts", destino,
         ]
+        # El registro de ffmpeg se manda a un archivo (no a un PIPE sin
+        # leer: si nadie lo lee, el buffer se llena y el proceso se cuelga).
+        fd, self.ruta_log = tempfile.mkstemp(prefix="agente_captura_", suffix=".log")
+        os.close(fd)
+        archivo_log = open(self.ruta_log, "w", encoding="utf-8", errors="replace")
         try:
             self.proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cmd, stdout=archivo_log, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError as e:
             messagebox.showerror("No pude iniciar", str(e))
             return
+        finally:
+            archivo_log.close()
         self.boton.config(text="Detener")
+        self.boton_log.config(state="normal")
         self.estado_var.set("🟡 Conectando…")
 
     def _detener(self):
@@ -220,6 +234,24 @@ class FilaEvento:
             self.proc.terminate()
         self.boton.config(text="Iniciar")
         self.estado_var.set("⚪ Detenido")
+
+    def _ver_registro(self):
+        contenido = "(sin registro todavía)"
+        if self.ruta_log and os.path.isfile(self.ruta_log):
+            try:
+                with open(self.ruta_log, encoding="utf-8", errors="replace") as f:
+                    contenido = f.read() or "(el registro está vacío — sin "\
+                        "errores hasta ahora, o ffmpeg no ha impreso nada)"
+            except OSError as e:
+                contenido = f"No pude leer el registro: {e}"
+
+        ventana = tk.Toplevel(self.marco)
+        ventana.title("Registro de ffmpeg")
+        ventana.geometry("640x360")
+        texto = scrolledtext.ScrolledText(ventana, wrap="word")
+        texto.pack(fill="both", expand=True, padx=8, pady=8)
+        texto.insert("1.0", contenido)
+        texto.config(state="disabled")
 
     def refrescar_estado(self):
         if self.proc is None:
@@ -231,7 +263,7 @@ class FilaEvento:
             self.estado_var.set("⚪ Detenido")
             self.boton.config(text="Iniciar")
         else:
-            self.estado_var.set(f"🔴 Error (código {codigo})")
+            self.estado_var.set(f"🔴 Error (código {codigo}) — ver registro")
             self.boton.config(text="Iniciar")
 
 
