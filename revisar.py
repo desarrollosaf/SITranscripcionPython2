@@ -472,6 +472,16 @@ main{padding:26px 30px 90px;max-width:820px}
     <pre class="log-lan oculto" id="logLan"></pre>
   </div>
 </details>
+<details class="lanzador" id="panelTrabajosApi">
+  <summary>Trabajos de la API (Evento del Congreso)</summary>
+  <div class="cuerpo-lan">
+    <p class="nota-lan">Los que se crearon eligiendo "Evento del Congreso"
+    arriba. Puedes detenerlos desde aquí — un trabajo detenido desaparece
+    de la lista del operador de audio (el .exe).</p>
+    <button id="btnRefrescarTrabajosApi" class="accion">🔄 Actualizar</button>
+    <div id="listaTrabajosApi"></div>
+  </div>
+</details>
 <div id="meta"></div>
 <div class="cuerpo">
   <aside>
@@ -1229,6 +1239,46 @@ async function cargarLanzador(){
   if(est.corriendo){ $('#lanzador').open = true; vigilarTranscripcion(); }
 }
 
+async function cargarTrabajosApi(){
+  const cont = $('#listaTrabajosApi');
+  cont.innerHTML = '<p class="nota-lan">Cargando…</p>';
+  const trabajos = await api('/api/trabajos_api');
+  if(trabajos.error){
+    cont.innerHTML = '<p class="nota-lan">' + esc(trabajos.error) + '</p>';
+    return;
+  }
+  if(!trabajos.length){
+    cont.innerHTML = '<p class="nota-lan">No hay trabajos creados por la API todavía.</p>';
+    return;
+  }
+  cont.innerHTML = trabajos.map(t => {
+    const activo = t.estado === 'ejecutando' || t.estado === 'deteniendo';
+    const detalle = t.fuente === 'srt' ? ('SRT, puerto ' + t.puerto) : 'YouTube';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;'
+      + 'border-bottom:1px solid var(--linea)">'
+      + '<div style="flex:1">'
+      + '<strong>' + esc((t.url || '').slice(0, 70)) + '</strong><br>'
+      + '<span class="nota-lan">' + esc(detalle) + ' · ' + esc(t.estado)
+      + (t.sesion_id ? ' · sesión #' + t.sesion_id : '') + '</span>'
+      + '</div>'
+      + (activo
+         ? '<button class="accion" data-id="' + esc(t.id) + '">Detener</button>'
+         : '<span class="nota-lan">detenido</span>')
+      + '</div>';
+  }).join('');
+  cont.querySelectorAll('button[data-id]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      const r = await api('/api/trabajos_api/detener', {id: b.dataset.id});
+      if(r.error) avisar(typeof r.error === 'string' ? r.error : JSON.stringify(r.error));
+      else avisar('Trabajo detenido.');
+      cargarTrabajosApi();
+    };
+  });
+}
+$('#btnRefrescarTrabajosApi').onclick = cargarTrabajosApi;
+cargarTrabajosApi();
+
 iniciar();
 cargarLanzador();
 </script>
@@ -1912,44 +1962,68 @@ class Manejador(BaseHTTPRequestHandler):
                 {"error": f"No pude detenerla: {e}"}, codigo=500)
         return self._responder({"ok": True, "detenida": True})
 
-    def _crear_transcripcion_evento(self, datos):
-        """Reenvía a la API (api/) la creación de un trabajo a partir de un
-        evento real del Congreso, usando el mismo token de sesión del
-        operador (no requiere iniciar sesión otra vez)."""
-        token = None
+    def _token_cookie(self):
         m = re.search(rf"{COOKIE_SESION}=([^;]+)",
                       self.headers.get("Cookie", ""))
-        if m:
-            token = m.group(1)
+        return m.group(1) if m else None
+
+    def _llamar_api(self, metodo, ruta, cuerpo=None):
+        """Reenvía una petición a la API (api/) usando el mismo token de
+        sesión del operador (no requiere iniciar sesión otra vez).
+        Devuelve (datos, error) — error es un dict {"error":...,"codigo":...}
+        listo para responder si algo falló, o None si salió bien."""
+        token = self._token_cookie()
         if not token:
-            return self._responder({"error": "No autenticado"}, codigo=401)
+            return None, {"error": "No autenticado", "codigo": 401}
 
         import urllib.error
         import urllib.request
-        cuerpo = json.dumps({
-            "evento_id": datos.get("evento_id"),
-            "tipo": int(datos.get("tipo", 1)),
-            "modelo": datos.get("modelo") or "small",
-        }).encode("utf-8")
+        datos_bin = json.dumps(cuerpo).encode("utf-8") if cuerpo is not None else None
         peticion = urllib.request.Request(
-            f"{self.api_interna}/transcripciones/desde-evento", data=cuerpo,
+            f"{self.api_interna}{ruta}", data=datos_bin,
             headers={"Content-Type": "application/json",
                     "Authorization": f"Bearer {token}"},
-            method="POST")
+            method=metodo)
         try:
             with urllib.request.urlopen(peticion, timeout=20) as r:
-                return self._responder(json.loads(r.read().decode("utf-8")))
+                return json.loads(r.read().decode("utf-8")), None
         except urllib.error.HTTPError as e:
             crudo = e.read().decode("utf-8", errors="replace")
             try:
                 detalle = json.loads(crudo).get("detail", crudo)
             except ValueError:
                 detalle = crudo
-            return self._responder({"error": detalle}, codigo=e.code)
+            return None, {"error": detalle, "codigo": e.code}
         except Exception as e:
-            return self._responder(
-                {"error": f"No pude contactar la API ({self.api_interna}): {e}"},
-                codigo=502)
+            return None, {
+                "error": f"No pude contactar la API ({self.api_interna}): {e}",
+                "codigo": 502}
+
+    def _crear_transcripcion_evento(self, datos):
+        """Crea un trabajo a partir de un evento real del Congreso."""
+        cuerpo = {
+            "evento_id": datos.get("evento_id"),
+            "tipo": int(datos.get("tipo", 1)),
+            "modelo": datos.get("modelo") or "small",
+        }
+        resultado, err = self._llamar_api("POST", "/transcripciones/desde-evento",
+                                          cuerpo)
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder(resultado)
+
+    def _listar_trabajos_api(self):
+        resultado, err = self._llamar_api("GET", "/transcripciones")
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder(resultado)
+
+    def _detener_trabajo_api(self, job_id):
+        resultado, err = self._llamar_api(
+            "POST", f"/transcripciones/{job_id}/detener")
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder(resultado)
 
     def do_GET(self):
         p = urlparse(self.path)
@@ -2049,6 +2123,10 @@ class Manejador(BaseHTTPRequestHandler):
                 self._responder(
                     {"error": f"No pude consultar el Congreso: {e}"},
                     codigo=502)
+        elif p.path == "/api/trabajos_api":
+            # Trabajos creados vía la API (fuente youtube/srt) — para verlos
+            # y poder detenerlos desde aquí mismo, sin usar /docs.
+            self._listar_trabajos_api()
         elif p.path == "/api/exportar_word":
             q = parse_qs(p.query)
             try:
@@ -2289,6 +2367,8 @@ class Manejador(BaseHTTPRequestHandler):
             return self._detener_transcripcion()
         if p.path == "/api/transcripciones_evento":
             return self._crear_transcripcion_evento(datos)
+        if p.path == "/api/trabajos_api/detener":
+            return self._detener_trabajo_api(datos.get("id"))
 
         con = self._db()
         try:
