@@ -18,13 +18,18 @@ aparecen como sugerencias al corregir.
 """
 
 import argparse
+import html
+import html.parser
 import json
+import math
+import mimetypes
 import os
 import re
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -412,6 +417,11 @@ main{padding:26px 30px 90px;max-width:820px}
     <span class="grupo-tit"><span class="paso">3</span>Exportar</span>
     <button id="btnExportarWord" class="accion primario"
             title="Descargar el documento Word formateado">📄 Descargar Word</button>
+  </div>
+  <div class="grupo">
+    <span class="grupo-tit">Colaborar</span>
+    <a id="lnkEsteno" class="accion" href="/esteno?admin=1"
+       title="Reparte la sesión en tramos entre varios correctores">👥 Módulo estenográfico</a>
   </div>
   <label class="vivo" title="Sigue la transcripción casi en tiempo real (se actualiza cada ~2.5 s y se pausa mientras editas). Desmárcala para pausar.">
     <input type="checkbox" id="chkVivo" checked> Auto-actualizar</label>
@@ -926,6 +936,8 @@ async function cargarSesion(id, opts){
          ? ' · <a href="'+esc(s.url)+'" target="_blank" rel="noopener">ver video</a>'
          : '')
     : '';
+  const lnkEsteno = $('#lnkEsteno');
+  if(lnkEsteno) lnkEsteno.href = s.id ? ('/esteno?sesion='+s.id+'&admin=1') : '/esteno?admin=1';
   opcionesOradores(); pintarLateral(); pintarTranscripcion();
   return true;    // se redibujó
 }
@@ -1287,6 +1299,576 @@ cargarLanzador();
 """
 
 
+PAGINA_ESTENO = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Módulo estenográfico</title>
+<style>
+:root{
+  --papel:#FAF8F2; --panel:#FFFFFF; --tinta:#20221C; --tinta-suave:#494A41;
+  --tenue:#63625A; --verde:#1E5A38; --verde-hondo:#154029; --verde-suave:#E7EFE9;
+  --linea:#E4E1D6; --linea-fuerte:#D2CFC2; --ambar:#9C5E18; --ambar-suave:#FAF0DE;
+  --rojo:#9B2C2C; --rojo-suave:#F7E7E7; --azul:#1B4C7A; --azul-suave:#E5EEF6;
+  --r:9px; --r-sm:6px; --sombra:0 1px 2px rgba(30,40,25,.05),0 8px 24px rgba(30,40,25,.06);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--papel);color:var(--tinta);
+  font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+:focus-visible{outline:2px solid var(--ambar);outline-offset:2px}
+a{color:var(--verde)}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;
+  padding:13px 24px;background:var(--panel);border-bottom:1px solid var(--linea-fuerte)}
+header h1{margin:0;font:700 20px/1.05 Georgia,"Times New Roman",serif;color:var(--verde)}
+header .sub{color:var(--tenue);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:600}
+header .der{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rol{font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px}
+.rol.admin{background:var(--azul-suave);color:var(--azul)}
+.rol.corr{background:var(--verde-suave);color:var(--verde)}
+select,input[type=text],input[type=number]{font:inherit;font-size:14px;padding:7px 10px;
+  border:1px solid var(--linea-fuerte);border-radius:var(--r-sm);background:var(--panel);color:var(--tinta)}
+main{max-width:1080px;margin:0 auto;padding:20px 24px 80px}
+.tarjeta{background:var(--panel);border:1px solid var(--linea);border-radius:var(--r);
+  padding:18px 20px;margin:0 0 18px;box-shadow:var(--sombra)}
+.tarjeta h2{margin:0 0 4px;font:700 15px/1.2 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--verde)}
+.tarjeta p.ayuda{margin:0 0 14px;color:var(--tenue);font-size:13px}
+.fila{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+.campo{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--tenue)}
+.campo input,.campo select,.campo textarea{font-weight:400}
+.campo textarea{min-width:260px;min-height:74px;font:inherit;padding:7px 10px;
+  border:1px solid var(--linea-fuerte);border-radius:var(--r-sm)}
+.btn{font:600 14px/1.2 -apple-system,"Segoe UI",Roboto,sans-serif;padding:9px 15px;border-radius:var(--r-sm);
+  cursor:pointer;border:1px solid var(--linea-fuerte);background:var(--panel);color:var(--tinta);white-space:nowrap}
+.btn:hover{border-color:var(--verde);background:var(--verde-suave);color:var(--verde-hondo)}
+.btn.pri{background:var(--verde);border-color:var(--verde);color:#fff}
+.btn.pri:hover{background:var(--verde-hondo)}
+.btn.peligro{background:var(--rojo-suave);border-color:var(--rojo);color:var(--rojo)}
+.btn.chico{padding:5px 10px;font-size:13px}
+.btn:disabled{opacity:.5;cursor:default}
+.barra-prog{height:9px;border-radius:999px;background:var(--linea);overflow:hidden;margin:8px 0 2px}
+.barra-prog>span{display:block;height:100%;background:var(--verde);width:0}
+table.plan{width:100%;border-collapse:collapse;font-size:13.5px}
+table.plan th,table.plan td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--linea)}
+table.plan th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--tenue)}
+.badge{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px}
+.badge.pend{background:#EFEDE6;color:var(--tenue)}
+.badge.edit{background:var(--ambar-suave);color:var(--ambar)}
+.badge.term{background:var(--verde-suave);color:var(--verde)}
+.badge.mio{background:var(--azul-suave);color:var(--azul)}
+.bloques{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.bloque{border:1px solid var(--linea);border-radius:var(--r);padding:13px 15px;background:var(--panel)}
+.bloque.mio{border-color:var(--azul);box-shadow:0 0 0 1px var(--azul) inset}
+.bloque.en-curso{opacity:.6;filter:saturate(.5)}
+.bloque .rango{font:700 14px/1.2 -apple-system,"Segoe UI",Roboto,sans-serif}
+.bloque .met{font-size:12px;color:var(--tenue);margin:4px 0 10px}
+.editor-cab{position:sticky;top:0;z-index:10;background:var(--panel);
+  border:1px solid var(--linea-fuerte);border-radius:var(--r);padding:12px 16px;
+  margin:0 0 16px;box-shadow:var(--sombra)}
+.audio-controles{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.audio-controles .reloj{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px;min-width:118px}
+.audio-controles .btn{padding:7px 11px}
+.pista{flex:1 1 220px;min-width:180px}
+.seg{display:grid;grid-template-columns:92px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--linea)}
+.seg .t{font-size:12px;color:var(--tenue);font-variant-numeric:tabular-nums;background:none;border:0;
+  border-bottom:1px dashed var(--verde);color:var(--verde);cursor:pointer;padding:0;text-align:left;height:fit-content}
+.seg .t:hover{color:var(--ambar);border-color:var(--ambar)}
+.seg .campos{display:flex;flex-direction:column;gap:6px;min-width:0}
+.seg input.orador{font-weight:700;color:var(--verde);text-transform:uppercase;font-size:12.5px;
+  padding:5px 8px;border:1px solid var(--linea);border-radius:var(--r-sm);max-width:340px;flex:1 1 220px}
+.orador-fila{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg select.pick{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--linea-fuerte);
+  border-radius:var(--r-sm);background:var(--panel);color:var(--tenue);max-width:230px}
+.seg textarea.txt{font:16px/1.6 Georgia,"Times New Roman",serif;padding:8px 10px;border:1px solid var(--linea);
+  border-radius:var(--r-sm);resize:vertical;min-height:52px;width:100%}
+.seg textarea.txt:focus,.seg input.orador:focus{border-color:var(--verde);outline:none}
+/* Editor enriquecido (reemplaza al textarea) */
+.seg .editor-rico{font:16px/1.6 Georgia,"Times New Roman",serif;padding:8px 10px;
+  border:1px solid var(--linea);border-radius:var(--r-sm);min-height:52px;width:100%;
+  outline:none;text-align:justify;background:#fff}
+.seg .editor-rico:focus{border-color:var(--verde);outline:2px solid var(--verde-suave)}
+/* Barra de formato */
+.barra-fmt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px}
+.barra-fmt button{font:700 12px/1 -apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:4px 8px;border:1px solid var(--linea-fuerte);border-radius:4px;
+  background:var(--panel);color:var(--tinta);cursor:pointer;min-width:28px}
+.barra-fmt button:hover{background:var(--verde-suave);border-color:var(--verde)}
+.barra-fmt button.activo{background:var(--verde);color:#fff;border-color:var(--verde-hondo)}
+.barra-fmt select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--linea-fuerte);border-radius:4px;background:var(--panel)}
+.barra-fmt .sep{width:1px;background:var(--linea-fuerte);margin:2px 2px;align-self:stretch}
+.aviso{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(140%);
+  background:var(--tinta);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;
+  box-shadow:0 8px 26px rgba(0,0,0,.28);transition:transform .28s;z-index:50;max-width:90vw}
+.aviso.ver{transform:translateX(-50%) translateY(0)}
+.pie-editor{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--linea)}
+.atajos{font-size:12px;color:var(--tenue);margin-left:auto;align-self:center}
+.enlace-corr{display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0}
+.enlace-corr code{background:var(--verde-suave);padding:2px 7px;border-radius:var(--r-sm);color:var(--verde-hondo);font-size:12px}
+.cargando{color:var(--tenue);padding:30px;text-align:center}
+.pill-audio{font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px}
+.pill-audio.si{background:var(--verde-suave);color:var(--verde)}
+.pill-audio.no{background:var(--rojo-suave);color:var(--rojo)}
+@media(max-width:640px){.seg{grid-template-columns:1fr}main{padding:16px}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Módulo estenográfico</h1>
+    <div class="sub">Corrección colaborativa por tramos</div>
+  </div>
+  <div class="der">
+    <span id="rol" class="rol"></span>
+    <a href="/" class="btn chico">← Revisión principal</a>
+  </div>
+</header>
+<main id="app"><p class="cargando">Cargando…</p></main>
+<div id="aviso" class="aviso"></div>
+<script>
+const $ = s => document.querySelector(s);
+const app = $('#app');
+const params = new URLSearchParams(location.search);
+const S = {
+  sesion: parseInt(params.get('sesion')||'0',10) || 0,
+  corrector: (params.get('corrector')||'').trim(),
+  esAdmin: params.get('admin')==='1' || !(params.get('corrector')||'').trim(),
+  miSlot: null, config:null, bloques:[], total:0, audio:false, sesionInfo:null,
+  abierto:null, segmentos:[], timerEstado:null, timerLatido:null, au:null, nombres:[],
+};
+
+function avisar(t){ const a=$('#aviso'); a.textContent=t; a.classList.add('ver');
+  clearTimeout(avisar._t); avisar._t=setTimeout(()=>a.classList.remove('ver'),4200); }
+function esc(t){ const d=document.createElement('div'); d.textContent=(t==null?'':t); return d.innerHTML; }
+function hms(seg){ seg=Math.max(0,Math.floor(seg||0));
+  const h=Math.floor(seg/3600), m=Math.floor((seg%3600)/60), s=seg%60;
+  const p=n=>String(n).padStart(2,'0');
+  return (h>0? p(h)+':':'')+p(m)+':'+p(s); }
+async function api(path, body){
+  const opt = body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  let j={}; try{ j=await r.json(); }catch(e){}
+  if(!r.ok){ throw new Error(j.error || ('Error '+r.status)); }
+  return j;
+}
+function nombreSlot(slot){
+  const n = S.config && S.config.nombres || [];
+  return (n[slot] && n[slot].trim()) ? n[slot] : ('Corrector '+(slot+1));
+}
+
+async function cargarEstado(){
+  const d = await api('/api/esteno/estado?sesion='+S.sesion);
+  S.config=d.config; S.bloques=d.bloques; S.total=d.total_seg;
+  S.audio=d.audio; S.sesionInfo=d.sesion; S.progreso=d.progreso;
+  // Resolver mi slot por nombre (si el admin lo registró en la lista)
+  if(!S.esAdmin && S.miSlot===null && S.config && S.config.nombres){
+    const i = S.config.nombres.findIndex(n => (n||'').trim().toLowerCase()===S.corrector.toLowerCase());
+    if(i>=0) S.miSlot=i;
+  }
+}
+
+/* ---------------- ADMIN ---------------- */
+async function vistaAdmin(){
+  $('#rol').className='rol admin'; $('#rol').textContent='Administrador';
+  let sesiones=[]; try{ sesiones=await api('/api/sesiones'); }catch(e){}
+  const opts = '<option value="0">— Elige una sesión —</option>'+
+    sesiones.map(s=>'<option value="'+s.id+'"'+(s.id===S.sesion?' selected':'')+'>#'+s.id+' — '+esc((s.titulo||'').slice(0,60))+'</option>').join('');
+  let html = '<div class="tarjeta"><h2>Sesión</h2>'+
+    '<div class="fila"><label class="campo">Sesión a preparar<select id="selSes">'+opts+'</select></label></div></div>';
+  if(S.sesion){
+    const cfg=S.config||{};
+    const nombres=(cfg.nombres||[]).join('\\n');
+    html += '<div class="tarjeta"><h2>Plan de turnos</h2>'+
+      '<p class="ayuda">Define cuántos correctores trabajarán y de cuántos minutos será cada bloque. '+
+      'La duración es un <b>mínimo aproximado</b>: si al cumplirse el tiempo hay una intervención en curso, '+
+      'el bloque se extiende hasta que ese orador termine (no se parten intervenciones). '+
+      'Los bloques se reparten en rotación (Corrector 1: 1º, luego cada N; y así). '+
+      'Opcional: escribe los nombres (uno por línea, en orden) para generar sus enlaces.</p>'+
+      '<div class="fila">'+
+        '<label class="campo">Nº de correctores<input id="cNum" type="number" min="1" max="50" value="'+(cfg.num_correctores||2)+'" style="width:110px"></label>'+
+        '<label class="campo">Minutos por bloque<input id="cMin" type="number" min="1" max="120" value="'+((cfg.bloque_seg||600)/60)+'" style="width:130px"></label>'+
+        '<label class="campo">Nombres de correctores (opcional)<textarea id="cNom" placeholder="Ana&#10;Beto&#10;Carla">'+esc(nombres)+'</textarea></label>'+
+        '<button class="btn pri" id="bGen">Generar / actualizar plan</button>'+
+      '</div></div>';
+
+    // Audio
+    html += '<div class="tarjeta"><h2>Audio de la sesión</h2>'+
+      '<p class="ayuda">El audio se busca solo en la carpeta <code>audio/</code> como <code>sesion_'+S.sesion+'.mp3</code> (u otra extensión). '+
+      'Si está en otro lugar, pega aquí la ruta completa.</p>'+
+      '<div class="fila"><span class="pill-audio '+(S.audio?'si':'no')+'">'+(S.audio?'Audio detectado':'Sin audio')+'</span>'+
+      '<label class="campo" style="flex:1 1 320px">Ruta del audio<input id="aRuta" type="text" placeholder="C:\\\\ruta\\\\al\\\\audio.mp3 o /home/…/audio.mp3"></label>'+
+      '<button class="btn" id="bAudio">Vincular audio</button></div></div>';
+
+    // Progreso + plan (en su propio contenedor, para refrescar SOLO esto)
+    if(S.config){
+      html += '<div class="tarjeta"><h2>Avance</h2>'+
+        '<div id="panelPlan">'+panelPlanHTML()+'</div></div>';
+      if((S.config.nombres||[]).length){
+        html += '<div class="tarjeta"><h2>Enlaces para los correctores</h2>'+
+          '<p class="ayuda">Comparte a cada quien su enlace. Cada uno verá sus bloques asignados.</p>'+
+          S.config.nombres.map(n=>{
+            const url=location.origin+'/esteno?sesion='+S.sesion+'&corrector='+encodeURIComponent(n);
+            return '<div class="enlace-corr"><strong>'+esc(n)+':</strong> <code>'+esc(url)+'</code>'+
+              '<button class="btn chico" data-url="'+esc(url)+'">Copiar</button></div>';
+          }).join('')+'</div>';
+      }
+    }
+  }
+  app.innerHTML=html;
+
+  $('#selSes').onchange = e => { location.search='?sesion='+e.target.value+'&admin=1'; };
+  if($('#bGen')) $('#bGen').onclick = async ()=>{
+    const nombres=$('#cNom').value.split('\\n').map(x=>x.trim()).filter(Boolean);
+    try{
+      const r=await api('/api/esteno/configurar',{sesion_id:S.sesion,
+        num_correctores:parseInt($('#cNum').value,10)||1,
+        bloque_min:parseFloat($('#cMin').value)||10, nombres});
+      avisar('Plan generado: '+r.bloques+' bloques'+(r.reinicio?' (estados reiniciados)':'.'));
+      await cargarEstado(); vistaAdmin();
+    }catch(e){ avisar(e.message); }
+  };
+  if($('#bAudio')) $('#bAudio').onclick = async ()=>{
+    try{ const r=await api('/api/esteno/audio_ruta',{sesion_id:S.sesion,ruta:$('#aRuta').value.trim()});
+      avisar(r.existe?'Audio vinculado correctamente.':'Ruta guardada, pero el archivo no existe todavía.');
+      await cargarEstado(); vistaAdmin();
+    }catch(e){ avisar(e.message); }
+  };
+  app.querySelectorAll('button[data-url]').forEach(b=> b.onclick=()=>{
+    navigator.clipboard.writeText(b.dataset.url); avisar('Enlace copiado.'); });
+  cablearReasignar();
+}
+function panelPlanHTML(){
+  const pr=S.progreso||{terminados:0,total:0};
+  const pct = pr.total? Math.round(100*pr.terminados/pr.total):0;
+  return '<div class="barra-prog"><span style="width:'+pct+'%"></span></div>'+
+    '<p class="ayuda">'+pr.terminados+' de '+pr.total+' bloques terminados ('+pct+'%). '+
+    'Duración de la sesión: '+hms(S.total)+'. Se actualiza solo (sin borrar tu formulario).</p>'+
+    tablaPlan();
+}
+function cablearReasignar(){
+  app.querySelectorAll('select[data-reasignar]').forEach(sel=> sel.onchange=async ()=>{
+    try{ await api('/api/esteno/reasignar',{sesion_id:S.sesion,indice:parseInt(sel.dataset.reasignar,10),slot:parseInt(sel.value,10)});
+      await cargarEstado(); refrescarPlan(); }catch(err){ avisar(err.message); }
+  });
+}
+// Refresca SOLO el panel de avance/plan; nunca vuelve a dibujar el formulario.
+function refrescarPlan(){
+  const cont=document.getElementById('panelPlan');
+  if(!cont) return;
+  const a=document.activeElement;
+  if(a && a.matches && a.matches('select[data-reasignar]')) return; // no interrumpir
+  cont.innerHTML = panelPlanHTML();
+  cablearReasignar();
+}
+function tablaPlan(){
+  const N=S.config.num_correctores;
+  let r='<table class="plan"><thead><tr><th>#</th><th>Tramo</th><th>Asignado</th><th>Estado</th><th>Segmentos</th></tr></thead><tbody>';
+  S.bloques.forEach(b=>{
+    let opts=''; for(let i=0;i<N;i++) opts+='<option value="'+i+'"'+(i===b.slot?' selected':'')+'>'+esc(nombreSlot(i))+'</option>';
+    let est='<span class="badge pend">pendiente</span>';
+    if(b.estado==='editando') est='<span class="badge edit">editando · '+esc(b.tomado_por||'')+(b.vencido?' (inactivo)':'')+'</span>';
+    if(b.estado==='terminado') est='<span class="badge term">terminado · '+esc(b.terminado_por||'')+'</span>';
+    r+='<tr><td>'+(b.indice+1)+'</td><td>'+hms(b.inicio_seg)+' – '+hms(b.fin_seg)+'</td>'+
+       '<td><select data-reasignar="'+b.indice+'">'+opts+'</select></td><td>'+est+'</td><td>'+b.segmentos+'</td></tr>';
+  });
+  return r+'</tbody></table>';
+}
+
+/* ---------------- CORRECTOR ---------------- */
+function vistaCorrector(){
+  $('#rol').className='rol corr'; $('#rol').textContent='Corrector: '+(S.corrector||'—');
+  if(S.abierto!==null){ vistaEditor(); return; }
+  if(!S.config){ app.innerHTML='<div class="tarjeta"><h2>Aún no hay plan</h2><p class="ayuda">El administrador todavía no ha configurado los turnos de esta sesión. Vuelve a intentar en un momento.</p></div>'; return; }
+  let selSlot='';
+  if(S.miSlot===null){
+    let o=''; for(let i=0;i<S.config.num_correctores;i++) o+='<option value="'+i+'">'+esc(nombreSlot(i))+'</option>';
+    selSlot='<div class="tarjeta"><h2>¿Cuál eres?</h2><p class="ayuda">Tu nombre no está en la lista, elige tu turno para ver tus bloques.</p>'+
+      '<div class="fila"><label class="campo">Soy<select id="miSlot">'+o+'</select></label><button class="btn pri" id="bSlot">Confirmar</button></div></div>';
+  }
+  const mios = S.miSlot===null? [] : S.bloques.filter(b=>b.slot===S.miSlot);
+  const otros = S.miSlot===null? S.bloques : S.bloques.filter(b=>b.slot!==S.miSlot);
+  if(!S.bloques.length){
+    app.innerHTML = selSlot + '<div class="tarjeta"><h2>El plan aún no tiene bloques</h2>'+
+      '<p class="ayuda">La sesión todavía no registra duración (quizá acaba de empezar o aún no hay texto transcrito). '+
+      'Los bloques aparecerán solos en cuanto la transcripción avance; esta página se actualiza cada pocos segundos.</p></div>';
+    if($('#bSlot')) $('#bSlot').onclick=()=>{ S.miSlot=parseInt($('#miSlot').value,10); vistaCorrector(); };
+    return;
+  }
+  let html=selSlot;
+  if(S.miSlot!==null){
+    html+='<div class="tarjeta"><h2>Mis bloques'+(S.audio?'':' · <span class="pill-audio no">sin audio</span>')+'</h2>'+
+      '<p class="ayuda">Abre un bloque para corregirlo escuchando su tramo. Al terminar, guarda para afectar el registro final.</p>'+
+      '<div class="bloques">'+mios.map(b=>tarjBloque(b,true)).join('')+'</div></div>';
+  }
+  html+='<div class="tarjeta"><h2>Otros bloques</h2><p class="ayuda">Puedes ayudar con un bloque libre de otro turno.</p>'+
+    '<div class="bloques">'+otros.map(b=>tarjBloque(b,false)).join('')+'</div></div>';
+  app.innerHTML=html;
+  if($('#bSlot')) $('#bSlot').onclick=()=>{ S.miSlot=parseInt($('#miSlot').value,10); vistaCorrector(); };
+  app.querySelectorAll('button[data-abrir]').forEach(b=> b.onclick=()=>abrirBloque(parseInt(b.dataset.abrir,10)));
+}
+function tarjBloque(b,mio){
+  let est='<span class="badge pend">pendiente</span>', accion='';
+  const libre = b.estado!=='editando' || b.vencido || b.tomado_por===S.corrector;
+  if(b.estado==='editando') est='<span class="badge '+(b.tomado_por===S.corrector?'mio':'edit')+'">'+(b.tomado_por===S.corrector?'tú lo tienes':'editando · '+esc(b.tomado_por||'')+(b.vencido?' (inactivo)':''))+'</span>';
+  if(b.estado==='terminado') est='<span class="badge term">terminado</span>';
+  if(!b.listo){
+    accion='<span class="badge" style="background:#FEF3C7;color:#92400E;font-size:11px">⏳ grabando…</span>';
+  } else if(libre){
+    accion='<button class="btn '+(mio?'pri':'')+' chico" data-abrir="'+b.indice+'">'+(b.estado==='terminado'?'Revisar de nuevo':'Abrir y corregir')+'</button>';
+  } else {
+    accion='<button class="btn chico" disabled>En uso</button>';
+  }
+  return '<div class="bloque'+(mio?' mio':'')+(b.listo?'':' en-curso')+'">'+
+    '<div class="rango">Bloque '+(b.indice+1)+'</div>'+
+    '<div class="met">'+hms(b.inicio_seg)+' – '+hms(b.fin_seg)+' · '+b.segmentos+' segmentos<br>'+est+'</div>'+
+    accion+'</div>';
+}
+
+async function abrirBloque(indice){
+  try{
+    const r=await api('/api/esteno/tomar',{sesion_id:S.sesion,indice,corrector:S.corrector||'anónimo'});
+    S.abierto=r.bloque; S.segmentos=r.segmentos;
+    detenerPoll();
+    vistaEditor();
+    // latido para conservar el bloqueo mientras edita
+    S.timerLatido=setInterval(()=>{ api('/api/esteno/latido',{sesion_id:S.sesion,indice,corrector:S.corrector||'anónimo'}).catch(()=>{}); }, 30000);
+  }catch(e){ avisar(e.message); await cargarEstado(); vistaCorrector(); }
+}
+
+function vistaEditor(){
+  const b=S.abierto;
+  const turnos = agruparTurnos(S.segmentos);
+  const opcNombres = '<option value="">— elegir integrante —</option>' +
+    (S.nombres||[]).map(n=>'<option>'+esc(n)+'</option>').join('');
+  const datalist = '<datalist id="dlNombres">' +
+    (S.nombres||[]).map(n=>'<option value="'+esc(n)+'">').join('') + '</datalist>';
+  const barraFmt =
+    '<div class="barra-fmt">'+
+    '<button data-cmd="bold" title="Negrita (Ctrl+B)"><b>N</b></button>'+
+    '<button data-cmd="italic" title="Cursiva (Ctrl+I)"><i>C</i></button>'+
+    '<button data-cmd="underline" title="Subrayado (Ctrl+U)"><u>S</u></button>'+
+    '<button data-cmd="strikeThrough" title="Tachado"><s>T</s></button>'+
+    '<span class="sep"></span>'+
+    '<button data-cmd="justifyFull" title="Justificar">Just.</button>'+
+    '<button data-cmd="justifyLeft" title="Izquierda">Izq.</button>'+
+    '<button data-cmd="justifyCenter" title="Centrar">Cent.</button>'+
+    '<button data-cmd="justifyRight" title="Derecha">Der.</button>'+
+    '<span class="sep"></span>'+
+    '<button data-cmd="insertUnorderedList" title="Lista con viñetas">• Lista</button>'+
+    '<button data-cmd="insertOrderedList" title="Lista numerada">1. Lista</button>'+
+    '<span class="sep"></span>'+
+    '<button data-cmd="removeFormat" title="Quitar formato">Sin fmt</button>'+
+    '</div>';
+  let segs = turnos.map(t => {
+    const contenidoHTML = t.texto || '';
+    return '<div class="seg" data-ids="'+t.ids.join(',')+'">'+
+      '<button class="t" data-t="'+t.inicio_seg+'">'+esc(t.inicio_hms||hms(t.inicio_seg))+' ▸</button>'+
+      '<div class="campos">'+
+        '<div class="orador-fila">'+
+          '<input class="orador" list="dlNombres" value="'+esc(t.orador||'')+'" placeholder="Orador">'+
+          '<select class="pick" title="Elegir de la lista de integrantes">'+opcNombres+'</select>'+
+        '</div>'+
+        barraFmt+
+        '<div class="editor-rico" contenteditable="true" spellcheck="true">'+contenidoHTML+'</div>'+
+      '</div></div>';
+  }).join('');
+  segs = datalist + segs;
+  app.innerHTML =
+    '<div class="editor-cab">'+
+      '<div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-bottom:10px">'+
+        '<strong>Bloque '+(b.indice+1)+'</strong>'+
+        '<span style="color:var(--tenue);font-size:13px">'+hms(b.inicio_seg)+' – '+hms(b.fin_seg)+'</span>'+
+        (S.audio?'':'<span class="pill-audio no">sin audio</span>')+
+      '</div>'+
+      '<div class="audio-controles">'+
+        '<button class="btn" id="aRet" title="Atrasar 5 s (F1)">« 5s</button>'+
+        '<button class="btn pri" id="aPlay" title="Reproducir / pausar (F2)">▶ Reproducir</button>'+
+        '<button class="btn" id="aAde" title="Adelantar 5 s (F3)">5s »</button>'+
+        '<button class="btn" id="aIni" title="Ir al inicio del bloque">⟲ inicio</button>'+
+        '<span class="reloj" id="aReloj">00:00 / 00:00</span>'+
+        '<input class="pista" id="aPista" type="range" min="0" max="1000" value="0">'+
+        '<label style="font-size:12px;color:var(--tenue);display:flex;gap:5px;align-items:center"><input type="checkbox" id="aLoop" checked> solo mi tramo</label>'+
+        '<label style="font-size:12px;color:var(--tenue);display:flex;gap:5px;align-items:center">vel.'+
+          '<select id="aVel"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option></select></label>'+
+      '</div>'+
+    '</div>'+
+    '<div id="listaSeg">'+(segs||'<p class="ayuda">Este bloque no tiene segmentos.</p>')+'</div>'+
+    '<div class="pie-editor">'+
+      '<button class="btn pri" id="bTerm">✓ Guardar y terminar</button>'+
+      '<button class="btn" id="bAvance">Guardar avance</button>'+
+      '<button class="btn peligro" id="bCerrar">Cerrar sin guardar</button>'+
+      '<span class="atajos">Atajos: F1 atrasar · F2 play/pausa · F3 adelantar</span>'+
+    '</div>';
+  montarAudio();
+  $('#bTerm').onclick=()=>guardar(true);
+  $('#bAvance').onclick=()=>guardar(false);
+  $('#bCerrar').onclick=cerrar;
+  app.querySelectorAll('.seg .t').forEach(t=> t.onclick=()=>{ if(S.au){ S.au.currentTime=parseFloat(t.dataset.t); S.au.play(); actualizarPlay(); } });
+  app.querySelectorAll('.seg .pick').forEach(sel=> sel.onchange=()=>{
+    if(!sel.value) return;
+    sel.closest('.campos').querySelector('.orador').value=sel.value; sel.value='';
+  });
+  // Barra de formato: execCommand sobre el editor enfocado
+  app.querySelectorAll('.barra-fmt button[data-cmd]').forEach(btn=>{
+    btn.onmousedown=e=>{
+      e.preventDefault();  // no perder el foco del editor
+      document.execCommand(btn.dataset.cmd, false, null);
+    };
+  });
+  // Actualiza qué botones aparecen activos según la selección actual
+  function actualizarBarraFmt(){
+    const cmds=['bold','italic','underline','strikeThrough',
+                'justifyFull','justifyLeft','justifyCenter','justifyRight',
+                'insertUnorderedList','insertOrderedList'];
+    cmds.forEach(cmd=>{
+      app.querySelectorAll('[data-cmd="'+cmd+'"]').forEach(b=>{
+        b.classList.toggle('activo', document.queryCommandState(cmd));
+      });
+    });
+  }
+  app.querySelectorAll('.editor-rico').forEach(ed=>{
+    ed.addEventListener('keyup', actualizarBarraFmt);
+    ed.addEventListener('mouseup', actualizarBarraFmt);
+    ed.addEventListener('focus', actualizarBarraFmt);
+  });
+}
+
+function montarAudio(){
+  const b=S.abierto;
+  const au=new Audio(); S.au=au;
+  au.preload='metadata';
+  if(S.audio) au.src='/api/esteno/audio?sesion='+S.sesion;
+  au.playbackRate=parseFloat($('#aVel').value);
+  let listo=false;
+  au.addEventListener('loadedmetadata',()=>{ listo=true; au.currentTime=b.inicio_seg; pintarReloj(); });
+  au.addEventListener('timeupdate',()=>{
+    if($('#aLoop') && $('#aLoop').checked && au.currentTime>=b.fin_seg){ au.currentTime=b.inicio_seg; if(!au.paused) au.play(); }
+    pintarReloj();
+  });
+  au.addEventListener('ended',actualizarPlay);
+  au.addEventListener('play',actualizarPlay); au.addEventListener('pause',actualizarPlay);
+  function pintarReloj(){
+    const cur=Math.max(0,au.currentTime-b.inicio_seg), dur=Math.max(0,b.fin_seg-b.inicio_seg);
+    $('#aReloj').textContent=hms(cur)+' / '+hms(dur);
+    if(!$('#aPista').matches(':active')) $('#aPista').value=dur? Math.round(1000*cur/dur):0;
+  }
+  $('#aPlay').onclick=()=>{ if(!S.audio) return avisar('No hay audio vinculado a esta sesión.'); au.paused?au.play():au.pause(); };
+  $('#aRet').onclick=()=>{ au.currentTime=Math.max(b.inicio_seg,au.currentTime-5); };
+  $('#aAde').onclick=()=>{ au.currentTime=Math.min(b.fin_seg,au.currentTime+5); };
+  $('#aIni').onclick=()=>{ au.currentTime=b.inicio_seg; };
+  $('#aVel').onchange=()=>{ au.playbackRate=parseFloat($('#aVel').value); };
+  $('#aPista').oninput=()=>{ const dur=Math.max(0,b.fin_seg-b.inicio_seg); au.currentTime=b.inicio_seg+dur*($('#aPista').value/1000); pintarReloj(); };
+}
+function actualizarPlay(){ const btn=$('#aPlay'); if(!btn||!S.au) return;
+  btn.textContent = S.au.paused? '▶ Reproducir':'❚❚ Pausa'; }
+
+// Atajos de teclado (pensados también para el pedal más adelante)
+document.addEventListener('keydown', e=>{
+  if(S.abierto===null || !S.au) return;
+  const b=S.abierto;
+  if(e.key==='F1'){ e.preventDefault(); S.au.currentTime=Math.max(b.inicio_seg,S.au.currentTime-5); }
+  else if(e.key==='F2'){ e.preventDefault(); S.audio && (S.au.paused?S.au.play():S.au.pause()); }
+  else if(e.key==='F3'){ e.preventDefault(); S.au.currentTime=Math.min(b.fin_seg,S.au.currentTime+5); }
+});
+
+// Agrupa segmentos consecutivos del mismo orador en un solo turno editable,
+// respetando el orden de aparición. Une el texto en un párrafo corrido.
+function agruparTurnos(segs){
+  const turnos=[];
+  segs.forEach(s=>{
+    const last=turnos[turnos.length-1];
+    const orad=(s.orador||'').trim();
+    if(last && (last.orador||'').trim()===orad){
+      last.ids.push(s.id);
+      if((s.texto||'').trim()) last.partes.push((s.texto||'').trim());
+    }else{
+      turnos.push({ids:[s.id], orador:s.orador||'',
+        partes:(s.texto||'').trim()?[(s.texto||'').trim()]:[],
+        inicio_seg:s.inicio_seg, inicio_hms:s.inicio_hms});
+    }
+  });
+  turnos.forEach(t=> t.texto=t.partes.join(' '));
+  return turnos;
+}
+
+// Al guardar: el orador se aplica a TODOS los segmentos del turno; el texto
+// (ya unido y corregido) se guarda en el PRIMER segmento y los demás quedan
+// vacíos, para no duplicar. Se conservan ids y tiempos (audio intacto).
+function recogerTurnos(){
+  const payload=[];
+  Array.from(app.querySelectorAll('.seg')).forEach(d=>{
+    const ids=(d.dataset.ids||'').split(',').map(x=>parseInt(x,10)).filter(n=>!isNaN(n));
+    const orador=d.querySelector('.orador').value;
+    const ed=d.querySelector('.editor-rico');
+    const texto = ed ? ed.innerHTML : (d.querySelector('.txt')||{value:''}).value;
+    ids.forEach((id,k)=> payload.push({id, orador, texto: k===0? texto : ''}));
+  });
+  return payload;
+}
+async function guardar(terminar){
+  const b=S.abierto;
+  try{
+    const r=await api('/api/esteno/guardar',{sesion_id:S.sesion,indice:b.indice,
+      corrector:S.corrector||'anónimo', segmentos:recogerTurnos(), terminar});
+    avisar(terminar? ('Bloque '+(b.indice+1)+' terminado.') : ('Avance guardado.'));
+    if(terminar){ limpiarEditor(); await cargarEstado(); vistaCorrector(); iniciarPoll(); }
+  }catch(e){ avisar(e.message); }
+}
+async function cerrar(){
+  const b=S.abierto;
+  try{ await api('/api/esteno/soltar',{sesion_id:S.sesion,indice:b.indice,corrector:S.corrector||'anónimo'}); }catch(e){}
+  limpiarEditor(); await cargarEstado(); vistaCorrector(); iniciarPoll();
+}
+function limpiarEditor(){
+  if(S.au){ try{S.au.pause();}catch(e){} S.au=null; }
+  clearInterval(S.timerLatido); S.timerLatido=null; S.abierto=null; S.segmentos=[];
+}
+// Si cierra la pestaña con un bloque abierto, liberarlo.
+window.addEventListener('beforeunload', ()=>{
+  if(S.abierto!==null){
+    try{ navigator.sendBeacon('/api/esteno/soltar', new Blob([JSON.stringify({sesion_id:S.sesion,indice:S.abierto.indice,corrector:S.corrector||'anónimo'})],{type:'application/json'})); }catch(e){}
+  }
+});
+
+/* ---------------- Arranque + refresco ---------------- */
+function iniciarPoll(){
+  detenerPoll();
+  S.timerEstado=setInterval(async ()=>{
+    if(S.abierto!==null) return;             // no molestar mientras se edita
+    if(document.hidden) return;
+    // No refrescar si el usuario está escribiendo/eligiendo en un campo.
+    const a=document.activeElement;
+    if(a && a.matches && a.matches('input,select,textarea')) return;
+    try{
+      await cargarEstado();
+      if(S.esAdmin){
+        // Solo actualiza el panel de avance; el formulario NO se toca.
+        if(document.getElementById('panelPlan')) refrescarPlan();
+      }else{
+        vistaCorrector();
+      }
+    }catch(e){}
+  }, 4000);
+}
+function detenerPoll(){ clearInterval(S.timerEstado); S.timerEstado=null; }
+
+async function iniciar(){
+  if(!S.sesion && !S.esAdmin){ app.innerHTML='<div class="tarjeta"><h2>Falta la sesión</h2><p class="ayuda">Abre este módulo con un enlace que incluya la sesión.</p></div>'; return; }
+  if(S.esAdmin){
+    try{ if(S.sesion) await cargarEstado(); }catch(e){ avisar(e.message); }
+    vistaAdmin(); if(S.sesion) iniciarPoll();
+  }else{
+    try{ await cargarEstado(); }catch(e){ avisar(e.message); }
+    try{ const r=await api('/api/esteno/nombres?sesion='+S.sesion); S.nombres=r.nombres||[]; }catch(e){}
+    vistaCorrector(); iniciarPoll();
+  }
+}
+iniciar();
+</script>
+</body>
+</html>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Compactación: une físicamente los registros consecutivos del mismo orador
 # ---------------------------------------------------------------------------
@@ -1296,6 +1878,281 @@ def hms(segundos):
     h, r = divmod(segundos, 3600)
     m, s = divmod(r, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ---------------------------------------------------------------------------
+# Conversor HTML → python-docx
+# ---------------------------------------------------------------------------
+
+class _NodoHTML:
+    """Árbol simplificado del HTML: tag, atributos, hijos (texto o nodos)."""
+    def __init__(self, tag="", attrs=None):
+        self.tag = tag.lower() if tag else ""
+        self.attrs = dict(attrs or [])
+        self.children = []
+
+    def texto_plano(self):
+        out = []
+        for c in self.children:
+            if isinstance(c, str):
+                out.append(c)
+            else:
+                out.append(c.texto_plano())
+        return "".join(out)
+
+
+class _Parser(html.parser.HTMLParser):
+    VOID = {"br", "hr", "img", "input", "meta", "link"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _NodoHTML("root")
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        nodo = _NodoHTML(tag, attrs)
+        self.stack[-1].children.append(nodo)
+        if tag not in self.VOID:
+            self.stack.append(nodo)
+
+    def handle_startendtag(self, tag, attrs):
+        self.stack[-1].children.append(_NodoHTML(tag.lower(), attrs))
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        for i in range(len(self.stack) - 1, 0, -1):
+            if self.stack[i].tag == tag:
+                self.stack = self.stack[:i]
+                break
+
+    def handle_data(self, data):
+        self.stack[-1].children.append(data)
+
+
+def _es_bloque(tag):
+    return tag in {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+                   "blockquote", "ul", "ol", "li", "br", "hr"}
+
+
+def html_a_word(doc, texto_html, orador=None,
+                fuente_nombre="Arial", fuente_pt=11,
+                justify=True, first_indent_cm=None):
+    """Inserta en `doc` los párrafos y runs equivalentes al HTML dado.
+    Si `orador` no es None, el primer párrafo lleva el nombre en negrita.
+    Devuelve el número de párrafos añadidos."""
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    if not texto_html or not texto_html.strip():
+        return 0
+
+    # Si el texto no contiene etiquetas HTML, lo tratamos como texto plano
+    # (retrocompatibilidad con registros anteriores al formato enriquecido).
+    if "<" not in texto_html:
+        bloques = [b.strip() for b in texto_html.replace("\r", "").split("\n")
+                   if b.strip()]
+        if not bloques:
+            return 0
+        for k, bloque in enumerate(bloques):
+            p = doc.add_paragraph()
+            if justify:
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            if k == 0 and orador:
+                r = p.add_run(f"{orador.upper()}: ")
+                r.bold = True
+                r.font.name = fuente_nombre
+                r.font.size = Pt(fuente_pt)
+            elif first_indent_cm and k > 0:
+                p.paragraph_format.first_line_indent = Cm(first_indent_cm)
+            r2 = p.add_run(bloque)
+            r2.font.name = fuente_nombre
+            r2.font.size = Pt(fuente_pt)
+        return len(bloques)
+
+    # Parsear el HTML.
+    parser = _Parser()
+    parser.feed(texto_html)
+    root = parser.root
+
+    parrafos_añadidos = 0
+    primer = True
+
+    def nuevo_parrafo(align=None):
+        nonlocal parrafos_añadidos, primer
+        p = doc.add_paragraph()
+        if align:
+            p.alignment = align
+        elif justify:
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        if primer and orador:
+            r = p.add_run(f"{orador.upper()}: ")
+            r.bold = True
+            r.font.name = fuente_nombre
+            r.font.size = Pt(fuente_pt)
+            primer = False
+        elif first_indent_cm and parrafos_añadidos > 0:
+            p.paragraph_format.first_line_indent = Cm(first_indent_cm)
+        parrafos_añadidos += 1
+        return p
+
+    def alinear(nodo):
+        style = nodo.attrs.get("style", "")
+        if "center" in style:
+            return WD_ALIGN_PARAGRAPH.CENTER
+        if "right" in style:
+            return WD_ALIGN_PARAGRAPH.RIGHT
+        cls = nodo.attrs.get("class", "")
+        if "text-center" in cls:
+            return WD_ALIGN_PARAGRAPH.CENTER
+        if "text-right" in cls:
+            return WD_ALIGN_PARAGRAPH.RIGHT
+        return None
+
+    def volcar_inline(p, nodo, bold=False, italic=False,
+                      underline=False, strike=False, color=None):
+        """Recorre un nodo inline y agrega runs al párrafo p."""
+        for c in nodo.children:
+            if isinstance(c, str):
+                if c:
+                    r = p.add_run(c)
+                    r.bold = bold
+                    r.italic = italic
+                    r.underline = underline
+                    r.font.strike = strike
+                    r.font.name = fuente_nombre
+                    r.font.size = Pt(fuente_pt)
+                    if color:
+                        try:
+                            hex_c = color.lstrip("#")
+                            r.font.color.rgb = RGBColor(
+                                int(hex_c[0:2], 16),
+                                int(hex_c[2:4], 16),
+                                int(hex_c[4:6], 16))
+                        except Exception:
+                            pass
+            else:
+                t = c.tag
+                nb = bold or t in ("b", "strong")
+                ni = italic or t in ("i", "em")
+                nu = underline or t == "u"
+                ns = strike or t in ("s", "strike", "del")
+                nc = color
+                # color inline: style="color:#rrggbb"
+                st = c.attrs.get("style", "")
+                if "color:" in st:
+                    try:
+                        nc = st.split("color:")[1].split(";")[0].strip()
+                    except Exception:
+                        pass
+                if t == "br":
+                    p.add_run("\n")
+                elif t in ("b", "strong", "i", "em", "u", "s", "strike",
+                            "del", "span", "a", "mark"):
+                    volcar_inline(p, c, nb, ni, nu, ns, nc)
+                elif _es_bloque(t):
+                    # bloque dentro de inline: ignoramos estructura, volcamos texto
+                    volcar_inline(p, c, nb, ni, nu, ns, nc)
+                else:
+                    volcar_inline(p, c, nb, ni, nu, ns, nc)
+
+    def procesar(nodo, en_lista=None, nivel=0):
+        # Texto/tags inline (b, i, ...) que aparecen sueltos en la raíz, sin
+        # un <p>/<div> que los envuelva (típico de un contenteditable de una
+        # sola línea: el navegador no arma <div> hasta que se pulsa Enter).
+        # Se van acumulando en un mismo párrafo en vez de uno nuevo por nodo,
+        # y cada tag inline aplica su propio estilo (antes se perdía).
+        parrafo_suelto = None
+        for c in nodo.children:
+            if isinstance(c, str):
+                if c.strip():
+                    # Solo se recorta el espacio inicial si arranca párrafo;
+                    # el resto se conserva (separa palabras de tags vecinos,
+                    # p. ej. "texto <b>negrita</b> más texto").
+                    txt = c.lstrip() if parrafo_suelto is None else c
+                    if parrafo_suelto is None:
+                        parrafo_suelto = nuevo_parrafo()
+                    r = parrafo_suelto.add_run(txt)
+                    r.font.name = fuente_nombre
+                    r.font.size = Pt(fuente_pt)
+            elif isinstance(c, _NodoHTML):
+                t = c.tag
+                aln = alinear(c)
+
+                if t in ("b", "strong", "i", "em", "u", "s",
+                            "strike", "span", "a", "mark"):
+                    if parrafo_suelto is None:
+                        parrafo_suelto = nuevo_parrafo(align=aln)
+                    comodin = _NodoHTML("_wrap")
+                    comodin.children = [c]
+                    volcar_inline(parrafo_suelto, comodin)
+                    continue
+
+                parrafo_suelto = None   # cualquier otro tag cierra el suelto
+
+                if t in ("p", "div", "blockquote"):
+                    # Verificar si tiene hijos bloque para no crear párrafo vacío
+                    tiene_bloque = any(isinstance(h, _NodoHTML)
+                                       and _es_bloque(h.tag)
+                                       for h in c.children)
+                    if tiene_bloque:
+                        procesar(c, en_lista, nivel)
+                    else:
+                        p = nuevo_parrafo(align=aln)
+                        volcar_inline(p, c)
+
+                elif t in ("h1", "h2", "h3", "h4"):
+                    p = nuevo_parrafo(align=aln or WD_ALIGN_PARAGRAPH.LEFT)
+                    for h in c.children:
+                        if isinstance(h, str):
+                            r = p.add_run(h)
+                        else:
+                            r = p.add_run(h.texto_plano())
+                        r.bold = True
+                        tamaños = {"h1": 16, "h2": 14, "h3": 12, "h4": 11}
+                        r.font.size = Pt(tamaños.get(t, fuente_pt))
+                        r.font.name = fuente_nombre
+
+                elif t == "br":
+                    p = nuevo_parrafo()
+
+                elif t == "hr":
+                    p = nuevo_parrafo()
+                    p.add_run("─" * 60)
+
+                elif t in ("ul", "ol"):
+                    for i, li in enumerate(c.children):
+                        if isinstance(li, _NodoHTML) and li.tag == "li":
+                            p = nuevo_parrafo(align=aln)
+                            if t == "ul":
+                                prefijo = "  " * nivel + "• "
+                            else:
+                                prefijo = "  " * nivel + f"{i+1}. "
+                            r = p.add_run(prefijo)
+                            r.font.name = fuente_nombre
+                            r.font.size = Pt(fuente_pt)
+                            volcar_inline(p, li)
+                        elif isinstance(li, _NodoHTML) and li.tag in ("ul","ol"):
+                            procesar(_NodoHTML("_wrap",
+                                               []), en_lista, nivel + 1)
+
+                else:
+                    procesar(c, en_lista, nivel)
+
+    procesar(root)
+
+    # Si nunca se creó ningún párrafo (HTML vacío o solo etiquetas sin texto)
+    if parrafos_añadidos == 0 and orador:
+        p = doc.add_paragraph()
+        if justify:
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        r = p.add_run(f"{orador.upper()}: ")
+        r.bold = True
+        r.font.name = fuente_nombre
+        r.font.size = Pt(fuente_pt)
+        parrafos_añadidos = 1
+
+    return parrafos_añadidos
 
 
 def _ruta_membrete():
@@ -1339,6 +2196,172 @@ def _fecha_legible(valor):
 
 def _campo(fila, nombre, defecto=None):
     return fila[nombre] if nombre in fila.keys() else defecto
+
+
+# ===========================================================================
+#  Módulo estenográfico colaborativo: helpers
+# ===========================================================================
+ESTENO_LOCK_STALE = 180          # seg. sin latido tras los que un bloque se
+                                 # considera abandonado y otro puede retomarlo
+ESTENO_AUDIO_EXTS = ("m4a", "mp3", "wav", "ogg", "oga", "opus", "webm",
+                     "mka", "flac", "aac")
+
+
+def _esteno_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _esteno_dur_sesion(con, sid):
+    """Duración total conocida de la sesión, en segundos.
+    Usa fin_seg si el transcriptor lo llena; si no (queda en NULL/0), se
+    apoya en el inicio del último segmento (+1 s) para que ese segmento
+    quede dentro de un bloque. Devuelve 0 si la sesión está vacía."""
+    r = con.execute("SELECT MAX(fin_seg) AS f, MAX(inicio_seg) AS i "
+                    "FROM participaciones WHERE sesion_id=?", (sid,)).fetchone()
+    f = _esteno_num(r["f"]) if r else 0.0
+    i = _esteno_num(r["i"]) if r else 0.0
+    if f <= 0 and i <= 0:
+        return 0.0
+    return max(f, i + 1.0)
+
+
+def _esteno_config(con, sid):
+    return con.execute("SELECT * FROM esteno_config WHERE sesion_id=?",
+                       (sid,)).fetchone()
+
+
+def _esteno_generar(con, sid, num, dur, reset=False):
+    """Crea/actualiza los bloques de tiempo de una sesión SIN partir
+    intervenciones: cada bloque dura al menos `dur`, pero cierra al terminar
+    la intervención (racha del mismo orador) que esté en curso al cumplirse
+    el tiempo. Así, si al minuto alguien sigue hablando, ese bloque se
+    extiende hasta que cambie de orador; el siguiente turno empieza limpio.
+
+    Es 'append-only' y estable: los bloques ya 'editando'/'terminado' (o ya
+    completos) quedan CONGELADOS y nunca se reacomodan; solo se recalcula la
+    cola pendiente conforme la sesión crece en vivo.
+    - reset=True: borra todo y recrea (se usa al cambiar la duración)."""
+    num = max(1, int(num))
+    dur = max(5, int(dur))
+    if reset:
+        con.execute("DELETE FROM esteno_bloques WHERE sesion_id=?", (sid,))
+    existentes = list(con.execute("SELECT * FROM esteno_bloques WHERE "
+                                  "sesion_id=? ORDER BY indice", (sid,)))
+    # Congelamos los bloques tocados o ya completos; recalculamos solo la cola.
+    idx_congelado = -1
+    for b in existentes:
+        completo = (float(b["fin_seg"]) - float(b["inicio_seg"])) >= dur - 0.5
+        if b["estado"] in ("editando", "terminado") or completo:
+            idx_congelado = b["indice"]
+    con.execute("DELETE FROM esteno_bloques WHERE sesion_id=? AND indice>?",
+                (sid, idx_congelado))
+    conservados = [b for b in existentes if b["indice"] <= idx_congelado]
+    if conservados:
+        cubierto = float(conservados[-1]["fin_seg"])
+        idx = conservados[-1]["indice"] + 1
+    else:
+        cubierto = 0.0
+        idx = 0
+
+    total = _esteno_dur_sesion(con, sid)
+    if total <= cubierto:
+        con.commit()
+        return len(conservados)
+
+    # Turnos = rachas consecutivas del mismo orador, a partir de 'cubierto'.
+    segs = list(con.execute(
+        "SELECT id, orador, inicio_seg FROM participaciones WHERE sesion_id=? "
+        "AND inicio_seg >= ? ORDER BY inicio_seg, id", (sid, cubierto)))
+    turnos = []
+    for s in segs:
+        o = (s["orador"] or "").strip()
+        ini = float(s["inicio_seg"] or 0)
+        if turnos and turnos[-1]["orador"] == o:
+            turnos[-1]["ids"].append(s["id"])
+        else:
+            turnos.append({"orador": o, "inicio": ini, "ids": [s["id"]]})
+    if not turnos:
+        con.commit()
+        return len(conservados)
+    # Fin de cada turno = inicio del siguiente (el último, la duración total).
+    for i, t in enumerate(turnos):
+        t["fin"] = turnos[i + 1]["inicio"] if i + 1 < len(turnos) else total
+
+    # Empacar turnos en bloques de >= dur, cerrando en cambio de orador.
+    i = 0
+    ini_bloque = cubierto
+    while i < len(turnos):
+        j = i
+        while j < len(turnos) and (turnos[j]["fin"] - ini_bloque) < dur:
+            j += 1
+        if j >= len(turnos):
+            j = len(turnos) - 1        # cola: no alcanzó 'dur' todavía
+        fin_bloque = turnos[j]["fin"]
+        con.execute("INSERT INTO esteno_bloques (sesion_id,indice,inicio_seg,"
+                    "fin_seg,slot,estado) VALUES (?,?,?,?,?, 'pendiente')",
+                    (sid, idx, round(ini_bloque, 3), round(fin_bloque, 3),
+                     idx % num))
+        ini_bloque = fin_bloque
+        idx += 1
+        i = j + 1
+    con.commit()
+    return idx
+
+
+def _esteno_extender(con, sid):
+    """Agrega bloques nuevos si la sesión creció (transcripción en vivo),
+    sin tocar los estados de los existentes. No hace nada si no hay config."""
+    cfg = _esteno_config(con, sid)
+    if not cfg:
+        return 0
+    return _esteno_generar(con, sid, cfg["num_correctores"],
+                           cfg["bloque_seg"], reset=False)
+
+
+def _esteno_segmentos(con, sid, ini, fin):
+    """Segmentos cuyo inicio cae dentro de [ini, fin) del bloque.
+    Selecciona * para no depender de columnas opcionales (p. ej. fin_hms,
+    que no existe en todos los esquemas)."""
+    return list(con.execute(
+        "SELECT * FROM participaciones WHERE sesion_id=? "
+        "AND inicio_seg >= ? AND inicio_seg < ? ORDER BY inicio_seg, id",
+        (sid, ini, fin)))
+
+
+def _esteno_dir_audio():
+    env = os.environ.get("ESTENO_AUDIO_DIR", "").strip()
+    if env:
+        return env
+    base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "audio")
+
+
+def _esteno_ruta_audio(con, sid):
+    """Ruta del archivo de audio de la sesión, o None. Prioridad:
+    1) ruta fijada a mano por el admin (tabla esteno_audio);
+    2) audio/sesion_<id>.<ext> en la carpeta de audio (configurable);
+    3) audio/<id>/<cualquier archivo> ."""
+    try:
+        r = con.execute("SELECT ruta FROM esteno_audio WHERE sesion_id=?",
+                        (sid,)).fetchone()
+        if r and r["ruta"] and os.path.isfile(r["ruta"]):
+            return r["ruta"]
+    except sqlite3.Error:
+        pass
+    carpeta = _esteno_dir_audio()
+    for ext in ESTENO_AUDIO_EXTS:
+        p = os.path.join(carpeta, f"sesion_{sid}.{ext}")
+        if os.path.isfile(p):
+            return p
+    sub = os.path.join(carpeta, str(sid))
+    if os.path.isdir(sub):
+        for nombre in sorted(os.listdir(sub)):
+            if nombre.lower().rsplit(".", 1)[-1] in ESTENO_AUDIO_EXTS:
+                return os.path.join(sub, nombre)
+    return None
 
 
 def compactar(con, sesion_id, solo_ids=None):
@@ -1741,6 +2764,39 @@ class Manejador(BaseHTTPRequestHandler):
                 datos      TEXT,
                 creado     TEXT
             )""")
+        # --- Módulo estenográfico colaborativo (corrección por tramos) ---
+        # Configuración por sesión: cuántos correctores y duración del bloque.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS esteno_config (
+                sesion_id       INTEGER PRIMARY KEY,
+                num_correctores INTEGER NOT NULL,
+                bloque_seg      INTEGER NOT NULL,
+                nombres         TEXT,
+                creado          TEXT,
+                actualizado     TEXT
+            )""")
+        # Un renglón por bloque de tiempo, con su asignación y estado/bloqueo.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS esteno_bloques (
+                sesion_id     INTEGER,
+                indice        INTEGER,
+                inicio_seg    REAL,
+                fin_seg       REAL,
+                slot          INTEGER,
+                estado        TEXT DEFAULT 'pendiente',
+                tomado_por    TEXT,
+                tomado_en     TEXT,
+                terminado_por TEXT,
+                terminado_en  TEXT,
+                PRIMARY KEY (sesion_id, indice)
+            )""")
+        # Ruta explícita del audio de una sesión (si el descubrimiento
+        # automático no lo encuentra, el admin la fija a mano).
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS esteno_audio (
+                sesion_id INTEGER PRIMARY KEY,
+                ruta      TEXT
+            )""")
         con.commit()
         return con
 
@@ -1882,6 +2938,12 @@ class Manejador(BaseHTTPRequestHandler):
             omitidas = []
             if acepta("--voz"):
                 cmd += ["--voz"]
+            # Guardar el audio permite corregir escuchando en el módulo
+            # estenográfico. Si el transcriptor no lo soporta, se avisa.
+            if acepta("--conservar-audio"):
+                cmd += ["--conservar-audio"]
+            else:
+                omitidas.append("--conservar-audio")
             if acepta("--db"):
                 cmd += ["--db", self.ruta_db]
             if acepta("--contextos"):
@@ -1962,6 +3024,400 @@ class Manejador(BaseHTTPRequestHandler):
                 {"error": f"No pude detenerla: {e}"}, codigo=500)
         return self._responder({"ok": True, "detenida": True})
 
+    # ===================================================================
+    #  Módulo estenográfico colaborativo: endpoints
+    # ===================================================================
+    def _sid(self, q):
+        try:
+            return int(q.get("sesion", ["0"])[0] or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _esteno_nombres(self, q):
+        """Lista de nombres para el selector del editor: diputados del
+        catálogo (pleno), mesa directiva e integrantes de comisiones del
+        contextos.json, y los oradores ya usados en la sesión."""
+        nombres = set()
+        for n in cargar_catalogo():
+            if n and n.strip():
+                nombres.add(n.strip())
+
+        def agregar(v):
+            if isinstance(v, list):
+                for x in v:
+                    agregar(x)
+            elif isinstance(v, dict):
+                # {cargo: nombre} o {clave: {...}} o {"nombre": "..."}
+                for k in ("nombre", "name", "diputado", "integrante"):
+                    if isinstance(v.get(k), str) and v[k].strip():
+                        nombres.add(v[k].strip())
+                        return
+                for val in v.values():
+                    agregar(val)
+            elif isinstance(v, str) and v.strip():
+                nombres.add(v.strip())
+
+        try:
+            if os.path.isfile(self.ruta_contextos):
+                with open(self.ruta_contextos, encoding="utf-8") as f:
+                    cfg = json.load(f)
+                agregar(cfg.get("mesa_directiva"))
+                for com in (cfg.get("comisiones") or {}).values():
+                    agregar(com)
+        except Exception:
+            pass
+
+        sid = self._sid(q)
+        if sid:
+            con = self._db()
+            try:
+                for r in con.execute(
+                    "SELECT DISTINCT orador FROM participaciones WHERE "
+                    "sesion_id=? AND orador IS NOT NULL AND TRIM(orador)<>''",
+                    (sid,)):
+                    nombres.add((r["orador"] or "").strip())
+            finally:
+                con.close()
+        # Fuera vacíos y el marcador de 'sin identificar'.
+        for basura in ("", "DESCONOCIDO", "Desconocido", "desconocido"):
+            nombres.discard(basura)
+        self._responder({"nombres": sorted(nombres, key=lambda s: s.lower())})
+
+    def _esteno_estado(self, q):
+        sid = self._sid(q)
+        if not sid:
+            return self._responder({"error": "falta sesión"}, codigo=400)
+        con = self._db()
+        try:
+            _esteno_extender(con, sid)   # refleja el crecimiento en vivo
+            cfg = _esteno_config(con, sid)
+            total = _esteno_dur_sesion(con, sid)
+            ahora = time.time()
+            bloques = []
+            for b in con.execute("SELECT * FROM esteno_bloques WHERE "
+                                 "sesion_id=? ORDER BY indice", (sid,)):
+                cnt = con.execute(
+                    "SELECT COUNT(*) c FROM participaciones WHERE sesion_id=? "
+                    "AND inicio_seg>=? AND inicio_seg<?",
+                    (sid, b["inicio_seg"], b["fin_seg"])).fetchone()["c"]
+                vencido = False
+                if b["estado"] == "editando" and b["tomado_en"]:
+                    try:
+                        t = datetime.fromisoformat(b["tomado_en"]).timestamp()
+                        vencido = (ahora - t) > ESTENO_LOCK_STALE
+                    except ValueError:
+                        pass
+                bloques.append({
+                    "indice": b["indice"], "inicio_seg": b["inicio_seg"],
+                    "fin_seg": b["fin_seg"], "slot": b["slot"],
+                    "estado": b["estado"], "tomado_por": b["tomado_por"],
+                    "vencido": vencido, "terminado_por": b["terminado_por"],
+                    "segmentos": cnt,
+                    # Un bloque está listo para corregir cuando la transcripción
+                    # ya avanzó más allá de su fin: fin_seg < total de la sesión
+                    # (con un margen de 2 s para segmentos que llegan con retraso).
+                    "listo": float(b["fin_seg"]) <= total + 2.0
+                             if b["estado"] != "terminado" else True})
+            ruta_audio = _esteno_ruta_audio(con, sid)
+            ses = con.execute("SELECT id,titulo,inicio,url FROM sesiones "
+                              "WHERE id=?", (sid,)).fetchone()
+            # ¿Hay una transcripción activa en este momento?
+            proc = Manejador.proc_activo
+            sesion_corriendo = bool(proc and proc.poll() is None)
+        finally:
+            con.close()
+        conf = None
+        if cfg:
+            conf = {"num_correctores": cfg["num_correctores"],
+                    "bloque_seg": cfg["bloque_seg"],
+                    "nombres": (json.loads(cfg["nombres"])
+                                if cfg["nombres"] else [])}
+
+        # Recalcular 'listo' con conocimiento de si la sesión sigue viva.
+        # Un bloque está listo cuando:
+        #   a) la sesión YA terminó → todos los bloques están listos, o
+        #   b) la sesión sigue viva → solo los bloques cuyo fin_seg está al
+        #      menos dur/2 segundos antes del total actual (hay margen suficiente
+        #      para que el último bloque no sea el que está grabándose ahora).
+        dur_bloque = cfg["bloque_seg"] if cfg else 600
+        margen = max(30, dur_bloque // 2)
+        for b in bloques:
+            if b["estado"] == "terminado":
+                b["listo"] = True
+            elif not sesion_corriendo:
+                b["listo"] = True          # sesión terminada → todo listo
+            else:
+                # En vivo: listo solo si hay al menos 'margen' segundos
+                # de transcripción más allá del fin del bloque.
+                b["listo"] = float(b["fin_seg"]) <= total - margen
+
+        terminados = sum(1 for b in bloques if b["estado"] == "terminado")
+        self._responder({
+            "sesion": (dict(ses) if ses else None),
+            "config": conf, "total_seg": total, "bloques": bloques,
+            "progreso": {"terminados": terminados, "total": len(bloques)},
+            "audio": bool(ruta_audio)})
+
+    def _esteno_leer_segmentos(self, q):
+        sid = self._sid(q)
+        try:
+            indice = int(q.get("indice", ["-1"])[0])
+        except (TypeError, ValueError):
+            indice = -1
+        if not sid or indice < 0:
+            return self._responder({"error": "faltan datos"}, codigo=400)
+        con = self._db()
+        try:
+            b = con.execute("SELECT * FROM esteno_bloques WHERE sesion_id=? "
+                            "AND indice=?", (sid, indice)).fetchone()
+            if not b:
+                return self._responder({"error": "bloque inexistente"},
+                                       codigo=404)
+            segs = [dict(r) for r in _esteno_segmentos(
+                con, sid, b["inicio_seg"], b["fin_seg"])]
+        finally:
+            con.close()
+        self._responder({"segmentos": segs,
+                         "bloque": {"indice": indice,
+                                    "inicio_seg": b["inicio_seg"],
+                                    "fin_seg": b["fin_seg"]}})
+
+    def _esteno_servir_audio(self, q):
+        sid = self._sid(q)
+        con = self._db()
+        try:
+            ruta = _esteno_ruta_audio(con, sid)
+        finally:
+            con.close()
+        if not ruta or not os.path.isfile(ruta):
+            return self._responder(
+                {"error": "No hay audio para esta sesión."}, codigo=404)
+        tam = os.path.getsize(ruta)
+        tipo = mimetypes.guess_type(ruta)[0] or "application/octet-stream"
+        rango = self.headers.get("Range")
+        inicio, fin, parcial = 0, tam - 1, False
+        if rango:
+            mm = re.match(r"bytes=(\d*)-(\d*)", rango.strip())
+            if mm:
+                g1, g2 = mm.group(1), mm.group(2)
+                if g1 == "" and g2 != "":
+                    inicio, fin = max(0, tam - int(g2)), tam - 1
+                else:
+                    inicio = int(g1) if g1 else 0
+                    fin = int(g2) if g2 else tam - 1
+                inicio, fin = max(0, inicio), min(fin, tam - 1)
+                if inicio > fin:
+                    inicio, fin = 0, tam - 1
+                parcial = True
+        longitud = fin - inicio + 1
+        try:
+            self.send_response(206 if parcial else 200)
+            self.send_header("Content-Type", tipo)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(longitud))
+            if parcial:
+                self.send_header("Content-Range",
+                                 f"bytes {inicio}-{fin}/{tam}")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with open(ruta, "rb") as f:
+                f.seek(inicio)
+                restante = longitud
+                while restante > 0:
+                    trozo = f.read(min(65536, restante))
+                    if not trozo:
+                        break
+                    self.wfile.write(trozo)
+                    restante -= len(trozo)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass   # el navegador cambió de rango o cerró: normal con audio
+
+    def _esteno_configurar(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        if not sid:
+            return self._responder({"error": "falta sesión"}, codigo=400)
+        num = max(1, min(50, int(datos.get("num_correctores", 1) or 1)))
+        if datos.get("bloque_seg"):
+            dur = int(datos["bloque_seg"])
+        else:
+            dur = int(float(datos.get("bloque_min", 10) or 10) * 60)
+        dur = max(30, dur)
+        nombres = [str(x).strip() for x in (datos.get("nombres") or [])
+                   if str(x).strip()]
+        old = _esteno_config(con, sid)
+        reset = (old is None) or (old["bloque_seg"] != dur)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        njson = json.dumps(nombres, ensure_ascii=False)
+        if old:
+            con.execute("UPDATE esteno_config SET num_correctores=?, "
+                        "bloque_seg=?, nombres=?, actualizado=? "
+                        "WHERE sesion_id=?", (num, dur, njson, ahora, sid))
+        else:
+            con.execute("INSERT INTO esteno_config (sesion_id, "
+                        "num_correctores, bloque_seg, nombres, creado, "
+                        "actualizado) VALUES (?,?,?,?,?,?)",
+                        (sid, num, dur, njson, ahora, ahora))
+        n = _esteno_generar(con, sid, num, dur, reset=reset)
+        con.commit()
+        self._responder({"ok": True, "bloques": n, "reinicio": reset})
+
+    def _esteno_reasignar(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        indice = int(datos.get("indice", -1))
+        slot = int(datos.get("slot", 0))
+        if not sid or indice < 0:
+            return self._responder({"error": "faltan datos"}, codigo=400)
+        con.execute("UPDATE esteno_bloques SET slot=? WHERE sesion_id=? "
+                    "AND indice=?", (slot, sid, indice))
+        con.commit()
+        self._responder({"ok": True})
+
+    def _esteno_tomar(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        indice = int(datos.get("indice", -1))
+        corrector = (datos.get("corrector") or "").strip() or "anónimo"
+        if not sid or indice < 0:
+            return self._responder({"error": "faltan datos"}, codigo=400)
+        b = con.execute("SELECT * FROM esteno_bloques WHERE sesion_id=? "
+                        "AND indice=?", (sid, indice)).fetchone()
+        if not b:
+            return self._responder({"error": "bloque inexistente"},
+                                   codigo=404)
+        # Verificar que la transcripción ya cubrió todo el bloque.
+        if b["estado"] != "terminado":
+            proc = Manejador.proc_activo
+            sesion_corriendo = bool(proc and proc.poll() is None)
+            if sesion_corriendo:
+                total = _esteno_dur_sesion(con, sid)
+                cfg = _esteno_config(con, sid)
+                dur_bloque = cfg["bloque_seg"] if cfg else 600
+                margen = max(30, dur_bloque // 2)
+                if float(b["fin_seg"]) > total - margen:
+                    mins = int(b["fin_seg"] // 60)
+                    return self._responder(
+                        {"error": f"Este bloque aún está siendo grabado. "
+                                  f"Espera a que la transcripción pase del "
+                                  f"minuto {mins} para abrirlo."},
+                        codigo=409)
+        if (b["estado"] == "editando" and b["tomado_por"]
+                and b["tomado_por"] != corrector):
+            fresco = True
+            if b["tomado_en"]:
+                try:
+                    t = datetime.fromisoformat(b["tomado_en"]).timestamp()
+                    fresco = (time.time() - t) <= ESTENO_LOCK_STALE
+                except ValueError:
+                    fresco = False
+            if fresco:
+                return self._responder(
+                    {"error": "Este bloque lo está editando "
+                              + b["tomado_por"] + " en este momento."},
+                    codigo=409)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        con.execute("UPDATE esteno_bloques SET estado='editando', "
+                    "tomado_por=?, tomado_en=? WHERE sesion_id=? AND indice=?",
+                    (corrector, ahora, sid, indice))
+        con.commit()
+        segs = [dict(r) for r in _esteno_segmentos(
+            con, sid, b["inicio_seg"], b["fin_seg"])]
+        self._responder({"ok": True, "segmentos": segs,
+                         "bloque": {"indice": indice,
+                                    "inicio_seg": b["inicio_seg"],
+                                    "fin_seg": b["fin_seg"],
+                                    "slot": b["slot"]}})
+
+    def _esteno_latido(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        indice = int(datos.get("indice", -1))
+        corrector = (datos.get("corrector") or "").strip()
+        ahora = datetime.now().isoformat(timespec="seconds")
+        con.execute("UPDATE esteno_bloques SET tomado_en=? WHERE sesion_id=? "
+                    "AND indice=? AND tomado_por=? AND estado='editando'",
+                    (ahora, sid, indice, corrector))
+        con.commit()
+        self._responder({"ok": True})
+
+    def _esteno_soltar(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        indice = int(datos.get("indice", -1))
+        corrector = (datos.get("corrector") or "").strip()
+        con.execute("UPDATE esteno_bloques SET estado='pendiente', "
+                    "tomado_por=NULL, tomado_en=NULL WHERE sesion_id=? "
+                    "AND indice=? AND tomado_por=? AND estado='editando'",
+                    (sid, indice, corrector))
+        con.commit()
+        self._responder({"ok": True})
+
+    def _esteno_guardar(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        indice = int(datos.get("indice", -1))
+        corrector = (datos.get("corrector") or "").strip() or "anónimo"
+        terminar = bool(datos.get("terminar"))
+        segmentos = datos.get("segmentos") or []
+        if not sid or indice < 0:
+            return self._responder({"error": "faltan datos"}, codigo=400)
+        b = con.execute("SELECT * FROM esteno_bloques WHERE sesion_id=? "
+                        "AND indice=?", (sid, indice)).fetchone()
+        if not b:
+            return self._responder({"error": "bloque inexistente"},
+                                   codigo=404)
+        # Verifica que nadie más tenga un bloqueo fresco sobre el bloque.
+        if (b["estado"] == "editando" and b["tomado_por"]
+                and b["tomado_por"] != corrector):
+            fresco = True
+            if b["tomado_en"]:
+                try:
+                    t = datetime.fromisoformat(b["tomado_en"]).timestamp()
+                    fresco = (time.time() - t) <= ESTENO_LOCK_STALE
+                except ValueError:
+                    fresco = False
+            if fresco:
+                return self._responder(
+                    {"error": "Otro corrector (" + b["tomado_por"] + ") tomó "
+                              "el bloque mientras editabas. Recarga para no "
+                              "pisar su trabajo."}, codigo=409)
+        # Solo se permiten guardar segmentos que caen dentro del bloque.
+        ids_validos = {r["id"] for r in _esteno_segmentos(
+            con, sid, b["inicio_seg"], b["fin_seg"])}
+        n = 0
+        for s in segmentos:
+            try:
+                idseg = int(s.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if idseg not in ids_validos:
+                continue
+            orador = (s.get("orador") or "").strip()
+            texto = (s.get("texto") or "")
+            con.execute("UPDATE participaciones SET orador=?, texto=? "
+                        "WHERE id=? AND sesion_id=?",
+                        (orador, texto, idseg, sid))
+            n += 1
+        ahora = datetime.now().isoformat(timespec="seconds")
+        if terminar:
+            con.execute("UPDATE esteno_bloques SET estado='terminado', "
+                        "tomado_por=NULL, tomado_en=NULL, terminado_por=?, "
+                        "terminado_en=? WHERE sesion_id=? AND indice=?",
+                        (corrector, ahora, sid, indice))
+        else:
+            con.execute("UPDATE esteno_bloques SET estado='editando', "
+                        "tomado_por=?, tomado_en=? WHERE sesion_id=? "
+                        "AND indice=?", (corrector, ahora, sid, indice))
+        con.commit()
+        self._responder({"ok": True, "guardados": n,
+                         "terminado": bool(terminar)})
+
+    def _esteno_audio_ruta(self, con, datos):
+        sid = int(datos.get("sesion_id", 0) or 0)
+        ruta = (datos.get("ruta") or "").strip()
+        if not sid:
+            return self._responder({"error": "falta sesión"}, codigo=400)
+        con.execute("INSERT OR REPLACE INTO esteno_audio (sesion_id, ruta) "
+                    "VALUES (?, ?)", (sid, ruta))
+        con.commit()
+        self._responder({"ok": True, "existe": bool(ruta)
+                         and os.path.isfile(ruta)})
+
     def _token_cookie(self):
         m = re.search(rf"{COOKIE_SESION}=([^;]+)",
                       self.headers.get("Cookie", ""))
@@ -2038,6 +3494,17 @@ class Manejador(BaseHTTPRequestHandler):
                 "__REQUIERE_LOGIN__", "true" if self.requiere_login else "false")
             self._responder(pagina.encode("utf-8"),
                             "text/html; charset=utf-8")
+        elif p.path in ("/esteno", "/esteno/", "/esteno.html"):
+            self._responder(PAGINA_ESTENO.encode("utf-8"),
+                            "text/html; charset=utf-8")
+        elif p.path == "/api/esteno/estado":
+            self._esteno_estado(parse_qs(p.query))
+        elif p.path == "/api/esteno/segmentos":
+            self._esteno_leer_segmentos(parse_qs(p.query))
+        elif p.path == "/api/esteno/nombres":
+            self._esteno_nombres(parse_qs(p.query))
+        elif p.path == "/api/esteno/audio":
+            self._esteno_servir_audio(parse_qs(p.query))
         elif p.path == "/api/sesiones":
             con = self._db()
             filas = [dict(r) for r in con.execute(
@@ -2238,20 +3705,9 @@ class Manejador(BaseHTTPRequestHandler):
             # los saltos de línea (\n) que introdujo la corrección de la IA.
             # El primer párrafo puede empezar con el nombre del orador en negrita.
             def volcar_intervencion(orador, texto):
-                # Cada bloque separado por \n (o líneas en blanco) es un párrafo.
-                bloques = [b.strip() for b in texto.replace("\r", "").split("\n")]
-                bloques = [b for b in bloques if b]
-                if not bloques:
-                    return
-                # Primer párrafo: NOMBRE en negrita + primer bloque.
-                p0 = doc.add_paragraph()
-                run_orador = p0.add_run(f"{(orador or 'DESCONOCIDO').upper()}: ")
-                run_orador.bold = True
-                p0.add_run(bloques[0])
-                # Párrafos siguientes de la misma intervención (sangría de continuación).
-                for b in bloques[1:]:
-                    pc = doc.add_paragraph(b)
-                    pc.paragraph_format.first_line_indent = Cm(1)
+                html_a_word(doc, texto, orador=orador,
+                            fuente_nombre="Arial", fuente_pt=11,
+                            justify=True, first_indent_cm=1)
 
             # Agrupamos por orador consecutivo para que cada intervención
             # sea un bloque coherente (aunque en la BD estén partida en filas).
@@ -2372,7 +3828,21 @@ class Manejador(BaseHTTPRequestHandler):
 
         con = self._db()
         try:
-            if p.path == "/api/actualizar":
+            if p.path == "/api/esteno/configurar":
+                return self._esteno_configurar(con, datos)
+            elif p.path == "/api/esteno/reasignar":
+                return self._esteno_reasignar(con, datos)
+            elif p.path == "/api/esteno/tomar":
+                return self._esteno_tomar(con, datos)
+            elif p.path == "/api/esteno/latido":
+                return self._esteno_latido(con, datos)
+            elif p.path == "/api/esteno/soltar":
+                return self._esteno_soltar(con, datos)
+            elif p.path == "/api/esteno/guardar":
+                return self._esteno_guardar(con, datos)
+            elif p.path == "/api/esteno/audio_ruta":
+                return self._esteno_audio_ruta(con, datos)
+            elif p.path == "/api/actualizar":
                 ids = [int(i) for i in datos.get("ids", [])]
                 orador = (datos.get("orador") or "").strip()
                 sid = int(datos.get("sesion_id", 0) or 0)
