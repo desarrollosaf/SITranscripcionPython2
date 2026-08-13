@@ -49,6 +49,19 @@ from io import BytesIO
 
 COOKIE_SESION = "sesion_revisor"
 
+# Todo lo demás (lanzar transcripciones, editar sesiones, trabajos de la
+# API, usuarios) es de administrador. Una cuenta no-admin (agente de
+# captura, corrector) solo debería poder tocar esto — la lista es un
+# candado por defecto: lo que no está aquí, exige admin.
+_RUTAS_NO_ADMIN = {
+    "/api/yo", "/esteno", "/esteno/", "/esteno.html",
+    "/api/sesiones",  # para el selector de sesión del corrector
+    "/api/esteno/estado", "/api/esteno/segmentos", "/api/esteno/nombres",
+    "/api/esteno/audio",
+    "/api/esteno/tomar", "/api/esteno/latido", "/api/esteno/soltar",
+    "/api/esteno/guardar",
+}
+
 # Se rellenan en main() solo si --requiere-login está activo.
 _verificar_password = None
 _obtener_usuario = None
@@ -1953,7 +1966,7 @@ async function iniciar(){
       + '<p class="ayuda">Vuelve a <a href="/login">iniciar sesión</a>.</p></div>';
     return;
   }
-  if(!S.sesion && !S.esAdmin){ app.innerHTML='<div class="tarjeta"><h2>Falta la sesión</h2><p class="ayuda">Abre este módulo con un enlace que incluya la sesión.</p></div>'; return; }
+  if(!S.sesion && !S.esAdmin){ return vistaElegirSesion(); }
   if(S.esAdmin){
     try{ if(S.sesion) await cargarEstado(); }catch(e){ avisar(e.message); }
     vistaAdmin(); if(S.sesion) iniciarPoll();
@@ -1962,6 +1975,22 @@ async function iniciar(){
     try{ const r=await api('/api/esteno/nombres?sesion='+S.sesion); S.nombres=r.nombres||[]; }catch(e){}
     vistaCorrector(); iniciarPoll();
   }
+}
+// Landing del corrector cuando entra sin ?sesion= (p. ej. justo tras el
+// login): elige de la misma lista de sesiones que ve el admin.
+async function vistaElegirSesion(){
+  $('#rol').className='rol corr'; $('#rol').textContent='Corrector: '+(S.corrector||'—');
+  let sesiones=[]; try{ sesiones=await api('/api/sesiones'); }catch(e){}
+  if(!sesiones.length){
+    app.innerHTML = '<div class="tarjeta"><h2>Aún no hay sesiones</h2>'
+      + '<p class="ayuda">Cuando haya una sesión en curso o terminada, aparecerá aquí.</p></div>';
+    return;
+  }
+  const opts = '<option value="0">— Elige una sesión —</option>' +
+    sesiones.map(s=>'<option value="'+s.id+'">#'+s.id+' — '+esc((s.titulo||'').slice(0,70))+'</option>').join('');
+  app.innerHTML = '<div class="tarjeta"><h2>¿Qué sesión vas a corregir?</h2>'
+    + '<div class="fila"><label class="campo">Sesión<select id="selSesCorr">'+opts+'</select></label></div></div>';
+  $('#selSesCorr').onchange = e => { if(e.target.value) location.search='?sesion='+e.target.value; };
 }
 iniciar();
 </script>
@@ -3665,6 +3694,17 @@ class Manejador(BaseHTTPRequestHandler):
             return self._cerrar_sesion()
         if not self._usuario_autenticado():
             return self._redirigir_login()
+        if p.path not in _RUTAS_NO_ADMIN and not self._usuario_actual_admin():
+            if p.path in ("/", "/index.html"):
+                # Una cuenta no-admin no tiene nada que hacer en la consola
+                # completa (lanzar transcripciones, trabajos, usuarios) —
+                # se le manda directo a lo suyo.
+                self.send_response(302)
+                self.send_header("Location", "/esteno")
+                self.end_headers()
+                return
+            return self._responder(
+                {"error": "Requiere permisos de administrador"}, codigo=403)
         if p.path == "/api/yo":
             # Identidad real de la sesión actual — el módulo estenográfico
             # la usa para saber quién eres sin pedírtelo por URL/formulario.
@@ -3997,6 +4037,9 @@ class Manejador(BaseHTTPRequestHandler):
             return self._procesar_login(datos)
         if not self._usuario_autenticado():
             return self._responder({"error": "No autenticado"}, codigo=401)
+        if p.path not in _RUTAS_NO_ADMIN and not self._usuario_actual_admin():
+            return self._responder(
+                {"error": "Requiere permisos de administrador"}, codigo=403)
 
         # --- Lanzador de transcripción (costura 2) ---------------------
         # Estas rutas no tocan la base de datos, así que se resuelven antes
