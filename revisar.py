@@ -553,6 +553,20 @@ const estado = {sesiones:[], sesion:null, filas:[], turnos:[],
 const esc = s => s.replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// El módulo estenográfico guarda texto con formato (HTML: <div>, <b>, etc,
+// de su editor con negritas/cursivas — así se conserva el formato en el
+// Word). Esta pantalla siempre trabajó con texto plano; sin esto, esas
+// etiquetas salían tal cual como texto pegado en la transcripción.
+function htmlAPlano(texto){
+  if(!texto || texto.indexOf('<') === -1) return texto || '';
+  const d = document.createElement('div');
+  d.innerHTML = texto;
+  d.querySelectorAll('div,p,br,li').forEach(el => {
+    el.insertAdjacentText('beforebegin', ' ');
+  });
+  return (d.textContent || '').replace(/\\s+/g, ' ').trim();
+}
+
 // Convierte el Markdown del resumen (títulos #, negritas **, listas -/•,
 // separadores ---) en HTML legible. Escapa todo primero para que sea seguro.
 function mdAhtml(texto){
@@ -618,7 +632,7 @@ function agrupar(filas){
            voz:null, vozSim:0, revIa:null, motivoIa:''};
       turnos.push(t);
     }
-    t.ids.push(f.id); t.textos.push(f.texto); t.fin = f.fin_seg;
+    t.ids.push(f.id); t.textos.push(htmlAPlano(f.texto)); t.fin = f.fin_seg;
     if(f.voz_orador && (f.voz_similitud||0) > t.vozSim){
       t.voz = f.voz_orador; t.vozSim = f.voz_similitud||0;
     }
