@@ -1503,7 +1503,8 @@ table.plan th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color
   </div>
   <div class="der">
     <span id="rol" class="rol"></span>
-    <a href="/" class="btn chico">← Revisión principal</a>
+    <a id="lnkPrincipal" href="/" class="btn chico">← Revisión principal</a>
+    <a href="/logout" class="btn chico">Cerrar sesión</a>
   </div>
 </header>
 <main id="app"><p class="cargando">Cargando…</p></main>
@@ -1961,6 +1962,9 @@ async function iniciar(){
   try{
     const yo = await api('/api/yo');
     S.corrector = yo.email; S.esAdmin = !!yo.es_admin;
+    // Para un corrector, "/" solo lo regresa aquí mismo (no tiene acceso) —
+    // ese link no pinta nada; que se quede solo "Cerrar sesión".
+    if(!S.esAdmin){ const l=$('#lnkPrincipal'); if(l) l.style.display='none'; }
   }catch(e){
     app.innerHTML = '<div class="tarjeta"><h2>No se pudo verificar tu sesión</h2>'
       + '<p class="ayuda">Vuelve a <a href="/login">iniciar sesión</a>.</p></div>';
