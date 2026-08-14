@@ -30,10 +30,12 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import wave
 from datetime import datetime
+from queue import Queue
 from types import SimpleNamespace
 
 try:
@@ -858,7 +860,11 @@ def agregar_bloque_a_audio_esteno(ruta_bloque, sesion_id):
 # ---------------------------------------------------------------------------
 
 def abrir_db(ruta):
-    con = sqlite3.connect(ruta)
+    # check_same_thread=False: con --voz, el cálculo de huella corre en un
+    # hilo aparte (ver trabajador_voz) para no frenar la transcripción. El
+    # acceso sigue siendo seguro porque SIEMPRE se hace con lock_estado
+    # tomado — nunca hay dos hilos usando `con` al mismo tiempo.
+    con = sqlite3.connect(ruta, check_same_thread=False)
     con.execute("""
         CREATE TABLE IF NOT EXISTS sesiones (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1061,6 +1067,16 @@ def main():
         "huerfano_segundos": 0.0,   # duración del huérfano (para stats)
     }
     archivo_txt = open(ruta_txt, "a", encoding="utf-8")
+
+    # ---- Identificación de voz asíncrona (--voz) ----
+    # El cálculo de la huella (speechbrain) es lo más pesado del pipeline;
+    # se manda a un hilo aparte para que no frene la transcripción del
+    # siguiente bloque. `estado` y `con` los tocan los dos hilos, así que
+    # SIEMPRE se accede con lock_estado tomado (ver trabajador_voz más abajo
+    # y el bloque protegido en procesar_bloque).
+    cola_voz = Queue()
+    lock_estado = threading.Lock()
+    hilo_voz = None
 
     def emitir(orador, ini, fin, texto):
         """Imprime, escribe al .txt y guarda en la base de datos."""
@@ -1296,138 +1312,38 @@ def main():
                     estado["prev_resuelto"] = None
                 estado["voz"] = nuevo_tramo_voz()
 
-    def procesar_bloque(ruta):
-        idx = indice_de_bloque(ruta)
-        offset = idx * args.bloque
-        prompt = (prompt_sesion + estado["contexto"])[-800:]
-        try:
-            segmentos, _ = modelo.transcribe(
-                ruta, language="es", vad_filter=True,
-                beam_size=5, initial_prompt=prompt,
-                word_timestamps=True)
-        except Exception as e:
-            print(f"   [aviso] no se pudo transcribir {ruta}: {e}")
-            return
-        # Partir los segmentos que traen un silencio largo adentro: así el
-        # corte por pausa ve la frontera, las fórmulas de inicio de segmento
-        # ("Presidenta, informo...") pueden dispararse y la huella de voz no
-        # mezcla dos oradores en una misma rebanada
-        segmentos = dividir_por_silencios(segmentos, args.pausa_voz)
-        audio_bloque = None
-        if args.voz:
-            try:
-                audio_bloque = vz.cargar_wav(ruta)
-            except Exception as e:
-                print(f"   [voz] aviso: no se pudo leer el audio de este "
-                      f"bloque para identificación de voz ({e})")
-        texto_bloque = []
-        for s in segmentos:
-            texto = s.text.strip()
-            if not texto:
+    def trabajador_voz():
+        """Hilo aparte: calcula la huella de voz (lo pesado, speechbrain)
+        sin bloquear la transcripción del siguiente bloque. Consume la cola
+        en orden estricto (un solo hilo la lee), así que la secuencia de
+        eventos queda igual que en la versión síncrona, solo diferida en el
+        tiempo. Toda mutación de `estado`/`con` se hace con lock_estado
+        tomado — igual que en procesar_bloque — para que los dos hilos
+        nunca escriban al mismo tiempo."""
+        while True:
+            tarea = cola_voz.get()
+            if tarea is None:   # señal de apagado (ver 'finally' de main)
+                with lock_estado:
+                    evaluar_tramo_voz(cerrar=True)
+                cola_voz.task_done()
+                break
+
+            if tarea["tipo"] == "cambio_orador_texto":
+                # El protocolo (texto) cambió de orador: cierra el tramo de
+                # voz en curso antes de seguir, igual que antes se hacía
+                # en línea dentro de procesar_bloque.
+                with lock_estado:
+                    evaluar_tramo_voz(cerrar=True)
+                cola_voz.task_done()
                 continue
-            # Corregir errores de oído de Whisper (términos del protocolo
-            # y nombres del catálogo) antes de cualquier detección
-            texto = corregir_transcripcion(texto)
-            # Aplicar cambios de orador decididos en el segmento anterior
-            etiqueta_previa = estado["orador"]
-            if estado["pendiente"]:
-                estado["orador"] = estado["pendiente"]
-                estado["pendiente"] = None
-                estado["protegido"] = True   # respaldado por anuncio formal
-            elif estado["volver_mesa"]:
-                estado["orador"] = ORADOR_MESA
-                estado["volver_mesa"] = False
-                estado["protegido"] = False
-            # La Presidencia retoma sin anuncio ("Muchas gracias, señor
-            # diputado. Abro la discusión..."): aplica en ESTE segmento.
-            # La fórmula ES respaldo del protocolo: la etiqueta queda
-            # protegida y no se degrada a Desconocido si la voz no alcanza
-            # confianza plena (transiciones cortas y con ruido de sala)
-            if estado["orador"] != ORADOR_MESA and retoma_presidencia(texto):
-                estado["orador"] = ORADOR_MESA
-                estado["protegido"] = True
-            # La Secretaría rinde un informe a la Presidencia ("Presidenta,
-            # informo que ha sido verificado..."): son frases cortas cuya
-            # huella de voz es ruidosa, pero la fórmula es inequívoca. Se
-            # cambia de orador por texto, aunque el segmento no alcance la
-            # duración mínima para declarar cambio de voz
-            if toma_secretaria(texto):
-                sec = estado["secretaria"] or ORADOR_SECRETARIA
-                if estado["orador"] != sec:
-                    estado["orador"] = sec
-                    # con identidad conocida es respaldo de protocolo; la
-                    # etiqueta genérica queda abierta a que la voz la afine
-                    estado["protegido"] = estado["secretaria"] is not None
-            # Pase de lista / votación nominal: la respuesta corta va al
-            # diputado llamado; llamar nombres o comentar largo es de quien
-            # pasa la lista (el secretario)
-            llamado_aqui = None
-            if estado["modo_lista"]:
-                llamado_aqui = detectar_llamado(texto)
-                if estado["llamado"] \
-                        and (offset + s.start) <= estado["llamado_hasta"] \
-                        and es_respuesta_lista(texto):
-                    estado["orador"] = estado["llamado"]
-                    estado["protegido"] = True   # respaldado por el llamado
-                    estado["llamado"] = None
-                elif estado["secretario_lista"] \
-                        and (llamado_aqui
-                             or not es_respuesta_lista(texto)):
-                    # No es una respuesta de lista: es el secretario que
-                    # sigue leyendo (aunque el texto sea corto, como la
-                    # mitad de un apellido cortado por Whisper)
-                    estado["orador"] = estado["secretario_lista"]
-                    estado["protegido"] = True
-            # El protocolo cambió de orador: se cierra el tramo de voz
-            # anterior y se evalúa antes de empezar el nuevo
-            if args.voz and estado["orador"] != etiqueta_previa:
-                evaluar_tramo_voz(cerrar=True)
-            # ¿Este segmento anuncia a un nuevo orador?
-            nombre = detectar_nuevo_orador(texto)
-            if nombre:
-                estado["pendiente"] = etiqueta_orador(
-                    ajustar_al_catalogo(nombre))
-                estado["orador"] = ORADOR_MESA  # quien anuncia es la Mesa
-                estado["protegido"] = True      # anunciar es acto de la Mesa
-            if hay_cierre(texto):
-                estado["volver_mesa"] = True
-            row_id = emitir(estado["orador"], offset + s.start,
-                            offset + s.end, texto)
-            texto_bloque.append(texto)
-            # Contabilidad del modo pase de lista / votación nominal
-            t_min = texto.lower()
-            if PATRON_LISTA_ON.search(t_min):
-                if not estado["modo_lista"]:
-                    estado["secretario_lista"] = None
-                estado["modo_lista"] = True
-            if estado["modo_lista"] and PATRON_LISTA_OFF.search(t_min):
-                estado["modo_lista"] = False
-                estado["llamado"] = None
-                estado["secretario_lista"] = None
-            if estado["modo_lista"]:
-                if llamado_aqui is None:
-                    llamado_aqui = detectar_llamado(texto)
-                # Un llamado REAL de pase de lista es una frase corta
-                # ("Diputado Fulano de Tal."). Un nombre al final de una
-                # frase larga es la lectura de un listado (integraciones de
-                # comisiones, orden del día): mencionar no es llamar.
-                if llamado_aqui and len(texto) <= MAX_LARGO_LLAMADO:
-                    if estado["secretario_lista"] is None:
-                        estado["secretario_lista"] = estado["orador"]
-                        # quien pasa lista ES la Secretaría: si ya tiene
-                        # nombre propio, se recuerda para los informes
-                        if estado["orador"] not in (
-                                ORADOR_MESA, ORADOR_DESCONOCIDO,
-                                ORADOR_SECRETARIA):
-                            estado["secretaria"] = estado["orador"]
-                    estado["llamado"] = llamado_aqui
-                    estado["llamado_hasta"] = (offset + s.end
-                                               + SEG_LLAMADO_VIGENTE)
-            # Seguimiento de voz: pausa larga o cambio de voz cierran el
-            # tramo; el nuevo se identifica por su cuenta aunque arranque
-            # con frases cortas
-            if args.voz and audio_bloque is not None:
-                ini_abs, fin_abs = offset + s.start, offset + s.end
+
+            # tarea["tipo"] == "segmento": la parte pesada (fuera del lock,
+            # para que no frene a procesar_bloque mientras se calcula).
+            emb = calcular_huella_segmento(tarea["frag"])
+
+            with lock_estado:
+                ini_abs, fin_abs = tarea["ini_abs"], tarea["fin_abs"]
+                row_id, texto = tarea["row_id"], tarea["texto"]
                 tramo = estado["voz"]
                 # 1) Pausa prolongada: cierra el tramo; el que sigue hereda
                 #    la etiqueta y su respaldo (pausar no cambia de persona)
@@ -1436,8 +1352,6 @@ def main():
                         >= args.pausa_voz:
                     evaluar_tramo_voz(cerrar=True)
                     tramo = estado["voz"]
-                frag = vz.rebanada(audio_bloque, s.start, s.end)
-                emb = calcular_huella_segmento(frag)
                 # 2) Cambio de voz: solo un segmento con duración decente
                 #    puede declararlo (los de ~1 s dan huellas ruidosas y
                 #    cortaban a media frase). El segmento que delató el
@@ -1541,9 +1455,168 @@ def main():
                 # nuevo hasta lograrlo o hasta que el tramo cierre
                 if not tramo["resuelto"] and tramo["n"] >= 1:
                     evaluar_tramo_voz(cerrar=False)
-        estado["contexto"] = (estado["contexto"] + " "
-                              + " ".join(texto_bloque))[-300:]
-        con.commit()
+                con.commit()
+
+            cola_voz.task_done()
+
+    if args.voz:
+        hilo_voz = threading.Thread(target=trabajador_voz, daemon=True)
+        hilo_voz.start()
+
+    def procesar_bloque(ruta):
+        idx = indice_de_bloque(ruta)
+        offset = idx * args.bloque
+        prompt = (prompt_sesion + estado["contexto"])[-800:]
+        try:
+            segmentos, _ = modelo.transcribe(
+                ruta, language="es", vad_filter=True,
+                beam_size=5, initial_prompt=prompt,
+                word_timestamps=True)
+        except Exception as e:
+            print(f"   [aviso] no se pudo transcribir {ruta}: {e}")
+            return
+        # Partir los segmentos que traen un silencio largo adentro: así el
+        # corte por pausa ve la frontera, las fórmulas de inicio de segmento
+        # ("Presidenta, informo...") pueden dispararse y la huella de voz no
+        # mezcla dos oradores en una misma rebanada
+        segmentos = dividir_por_silencios(segmentos, args.pausa_voz)
+        audio_bloque = None
+        if args.voz:
+            try:
+                audio_bloque = vz.cargar_wav(ruta)
+            except Exception as e:
+                print(f"   [voz] aviso: no se pudo leer el audio de este "
+                      f"bloque para identificación de voz ({e})")
+        texto_bloque = []
+        for s in segmentos:
+            texto = s.text.strip()
+            if not texto:
+                continue
+            # Corregir errores de oído de Whisper (términos del protocolo
+            # y nombres del catálogo) antes de cualquier detección
+            texto = corregir_transcripcion(texto)
+            # Todo lo que lee/escribe `estado` o `con` va con lock_estado
+            # tomado: con --voz, trabajador_voz toca las mismas variables
+            # desde su propio hilo.
+            with lock_estado:
+                # Aplicar cambios de orador decididos en el segmento anterior
+                etiqueta_previa = estado["orador"]
+                if estado["pendiente"]:
+                    estado["orador"] = estado["pendiente"]
+                    estado["pendiente"] = None
+                    estado["protegido"] = True   # respaldado por anuncio formal
+                elif estado["volver_mesa"]:
+                    estado["orador"] = ORADOR_MESA
+                    estado["volver_mesa"] = False
+                    estado["protegido"] = False
+                # La Presidencia retoma sin anuncio ("Muchas gracias, señor
+                # diputado. Abro la discusión..."): aplica en ESTE segmento.
+                # La fórmula ES respaldo del protocolo: la etiqueta queda
+                # protegida y no se degrada a Desconocido si la voz no
+                # alcanza confianza plena (transiciones cortas y con ruido
+                # de sala)
+                if estado["orador"] != ORADOR_MESA \
+                        and retoma_presidencia(texto):
+                    estado["orador"] = ORADOR_MESA
+                    estado["protegido"] = True
+                # La Secretaría rinde un informe a la Presidencia
+                # ("Presidenta, informo que ha sido verificado..."): son
+                # frases cortas cuya huella de voz es ruidosa, pero la
+                # fórmula es inequívoca. Se cambia de orador por texto,
+                # aunque el segmento no alcance la duración mínima para
+                # declarar cambio de voz
+                if toma_secretaria(texto):
+                    sec = estado["secretaria"] or ORADOR_SECRETARIA
+                    if estado["orador"] != sec:
+                        estado["orador"] = sec
+                        # con identidad conocida es respaldo de protocolo;
+                        # la etiqueta genérica queda abierta a que la voz
+                        # la afine
+                        estado["protegido"] = estado["secretaria"] is not None
+                # Pase de lista / votación nominal: la respuesta corta va
+                # al diputado llamado; llamar nombres o comentar largo es
+                # de quien pasa la lista (el secretario)
+                llamado_aqui = None
+                if estado["modo_lista"]:
+                    llamado_aqui = detectar_llamado(texto)
+                    if estado["llamado"] \
+                            and (offset + s.start) <= estado["llamado_hasta"] \
+                            and es_respuesta_lista(texto):
+                        estado["orador"] = estado["llamado"]
+                        estado["protegido"] = True  # respaldado por el llamado
+                        estado["llamado"] = None
+                    elif estado["secretario_lista"] \
+                            and (llamado_aqui
+                                 or not es_respuesta_lista(texto)):
+                        # No es una respuesta de lista: es el secretario que
+                        # sigue leyendo (aunque el texto sea corto, como la
+                        # mitad de un apellido cortado por Whisper)
+                        estado["orador"] = estado["secretario_lista"]
+                        estado["protegido"] = True
+                # El protocolo cambió de orador: se manda a cerrar el tramo
+                # de voz anterior en el hilo de voz (no aquí, para no
+                # esperar a que se resuelva).
+                if args.voz and estado["orador"] != etiqueta_previa:
+                    cola_voz.put({"tipo": "cambio_orador_texto"})
+                # ¿Este segmento anuncia a un nuevo orador?
+                nombre = detectar_nuevo_orador(texto)
+                if nombre:
+                    estado["pendiente"] = etiqueta_orador(
+                        ajustar_al_catalogo(nombre))
+                    estado["orador"] = ORADOR_MESA  # quien anuncia es la Mesa
+                    estado["protegido"] = True  # anunciar es acto de la Mesa
+                if hay_cierre(texto):
+                    estado["volver_mesa"] = True
+                row_id = emitir(estado["orador"], offset + s.start,
+                                offset + s.end, texto)
+                # Contabilidad del modo pase de lista / votación nominal
+                t_min = texto.lower()
+                if PATRON_LISTA_ON.search(t_min):
+                    if not estado["modo_lista"]:
+                        estado["secretario_lista"] = None
+                    estado["modo_lista"] = True
+                if estado["modo_lista"] and PATRON_LISTA_OFF.search(t_min):
+                    estado["modo_lista"] = False
+                    estado["llamado"] = None
+                    estado["secretario_lista"] = None
+                if estado["modo_lista"]:
+                    if llamado_aqui is None:
+                        llamado_aqui = detectar_llamado(texto)
+                    # Un llamado REAL de pase de lista es una frase corta
+                    # ("Diputado Fulano de Tal."). Un nombre al final de una
+                    # frase larga es la lectura de un listado (integraciones
+                    # de comisiones, orden del día): mencionar no es llamar.
+                    if llamado_aqui and len(texto) <= MAX_LARGO_LLAMADO:
+                        if estado["secretario_lista"] is None:
+                            estado["secretario_lista"] = estado["orador"]
+                            # quien pasa lista ES la Secretaría: si ya tiene
+                            # nombre propio, se recuerda para los informes
+                            if estado["orador"] not in (
+                                    ORADOR_MESA, ORADOR_DESCONOCIDO,
+                                    ORADOR_SECRETARIA):
+                                estado["secretaria"] = estado["orador"]
+                        estado["llamado"] = llamado_aqui
+                        estado["llamado_hasta"] = (offset + s.end
+                                                   + SEG_LLAMADO_VIGENTE)
+            texto_bloque.append(texto)
+            # Seguimiento de voz: se manda la rebanada de audio al hilo de
+            # voz, que hace el cálculo pesado (huella) sin frenar aquí el
+            # siguiente bloque. rebanada() es una operación local barata
+            # (numpy), no hace falta el lock para esto.
+            if args.voz and audio_bloque is not None:
+                frag = vz.rebanada(audio_bloque, s.start, s.end)
+                cola_voz.put({
+                    "tipo": "segmento",
+                    "frag": frag,
+                    "ini_abs": offset + s.start,
+                    "fin_abs": offset + s.end,
+                    "row_id": row_id,
+                    "texto": texto,
+                })
+        with lock_estado:
+            estado["contexto"] = (estado["contexto"] + " "
+                                  + " ".join(texto_bloque))[-300:]
+            con.commit()
         if args.conservar_audio:
             try:
                 agregar_bloque_a_audio_esteno(ruta, sesion_id)
@@ -1601,11 +1674,19 @@ def main():
     finally:
         terminar_captura()
         if args.voz:
-            evaluar_tramo_voz(cerrar=True)  # el último tramo sin resolver
-        con.execute("UPDATE sesiones SET fin = ? WHERE id = ?",
-                    (datetime.now().isoformat(timespec="seconds"), sesion_id))
-        con.commit()
-        archivo_txt.close()
+            # Señal de apagado: el hilo de voz procesa lo que le quede en
+            # la cola, cierra el último tramo (evaluar_tramo_voz) y termina.
+            cola_voz.put(None)
+            print("\nFinalizando inferencia de huellas de voz restantes...")
+            cola_voz.join()
+            if hilo_voz:
+                hilo_voz.join()
+        with lock_estado:
+            con.execute("UPDATE sesiones SET fin = ? WHERE id = ?",
+                        (datetime.now().isoformat(timespec="seconds"),
+                         sesion_id))
+            con.commit()
+            archivo_txt.close()
 
         # ---- Resumen ----
         print("\n" + "=" * 60)
