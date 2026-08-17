@@ -23,6 +23,7 @@ Requiere: Python 3.9+, ffmpeg instalado y `pip install -r requirements.txt`
 import argparse
 import difflib
 import glob
+import json
 import os
 import re
 import shutil
@@ -662,11 +663,28 @@ def es_cambio_de_voz(tramo, emb, umbral):
     return float(np.dot(prom, emb)) < umbral
 
 
+def _es_modalidad_zoom(modalidad):
+    """El registro parlamentario usa 'Remota (zoom)' (además de
+    Presencial/Justificada/Pendiente) — aceptamos cualquier variante que
+    contenga 'remota' o 'zoom', sin importar mayúsculas ni el resto del
+    texto."""
+    m = (modalidad or "").strip().lower()
+    return "zoom" in m or "remota" in m
+
+
 def identificar_huella(emb, nombres, matriz, umbral,
-                       margen_min=MARGEN_MIN_VOZ):
+                       margen_min=MARGEN_MIN_VOZ, asistencia=None,
+                       ajuste_zoom=0.0):
     """Compara una huella contra los perfiles. Devuelve siempre el mejor
     candidato con su similitud y margen; la clave 'fuerte' indica si supera
-    el umbral con ventaja clara sobre el segundo lugar."""
+    el umbral con ventaja clara sobre el segundo lugar.
+
+    Si el mejor candidato consta en 'asistencia' como conectado en remoto
+    (Zoom), se le exige 'ajuste_zoom' menos de similitud: su audio ya llega
+    más pobre que el de la sala (compresión, banda angosta), así que la
+    huella se parece menos a su perfil aunque sí sea él — sin este ajuste,
+    eso se traduce en más 'Desconocido' específicamente para quien está
+    remoto."""
     if emb is None:
         return None
     sims = matriz @ emb
@@ -675,10 +693,15 @@ def identificar_huella(emb, nombres, matriz, umbral,
     segundo = orden[1] if len(orden) > 1 else orden[0]
     sim = float(sims[mejor])
     margen = float(sims[mejor] - sims[segundo])
+    umbral_efectivo = umbral
+    es_zoom = bool(asistencia) and _es_modalidad_zoom(asistencia.get(nombres[mejor]))
+    if es_zoom:
+        umbral_efectivo = max(0.0, umbral - ajuste_zoom)
     return {"candidato": nombres[mejor], "similitud": sim, "margen": margen,
             "segundo": nombres[segundo],
             "sim_segundo": float(sims[segundo]),
-            "fuerte": (sim >= umbral and margen >= margen_min)}
+            "fuerte": (sim >= umbral_efectivo and margen >= margen_min),
+            "umbral_usado": umbral_efectivo, "por_zoom": es_zoom}
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +969,16 @@ def main():
     ap.add_argument("--srt-passphrase", default="",
                     help="contraseña para cifrar el stream SRT entrante "
                          "(requerido junto con --puerto-srt)")
+    ap.add_argument("--asistencia", default=None,
+                    help="JSON {nombre: modalidad} (Presencial/Zoom/...) de "
+                         "quién asiste a esta sesión, del sistema de "
+                         "registro parlamentario. Con esto, a quien conste "
+                         "que está por Zoom se le exige menos similitud de "
+                         "voz para identificarlo (su audio es de por sí más "
+                         "pobre que el de la sala)")
+    ap.add_argument("--ajuste-zoom", type=float, default=0.05,
+                    help="cuánto se relaja --umbral-voz para alguien "
+                         "marcado como Zoom en --asistencia (default: 0.05)")
     args = ap.parse_args()
 
     # Consola en UTF-8 (evita errores de acentos en Windows)
@@ -1029,6 +1062,22 @@ def main():
             vz.asegurar_columnas_voz(con)
             print(f"[voz] {len(nombres_voz)} huellas cargadas; se vigilarán "
                   "los cambios de voz en todo el audio.")
+
+    # Asistencia (Presencial/Zoom) por diputado, si se mandó --asistencia.
+    # Nunca debe tumbar la sesión: un archivo faltante o mal formado
+    # simplemente la deja vacía (mismo comportamiento que sin el flag).
+    asistencia = {}
+    if args.asistencia:
+        try:
+            with open(args.asistencia, encoding="utf-8") as f:
+                asistencia = json.load(f)
+            n_zoom = sum(1 for m in asistencia.values() if _es_modalidad_zoom(m))
+            print(f"[asistencia] {len(asistencia)} diputado(s) con "
+                  f"modalidad registrada ({n_zoom} por Zoom); se les "
+                  f"exigirá {args.ajuste_zoom:.2f} menos de similitud de "
+                  "voz para identificarlos.")
+        except Exception as e:
+            print(f"[asistencia] No se pudo leer {args.asistencia}: {e}")
 
     print(f"\nSesión #{sesion_id}: {titulo}")
     print(f"Base de datos : {os.path.abspath(args.db)}")
@@ -1126,7 +1175,9 @@ def main():
             if tramo["resuelto"] or tramo["n"] == 0 or not tramo["ids"]:
                 return
             r = identificar_huella(huella_promedio(tramo), nombres_voz,
-                                   matriz_voz, args.umbral_voz)
+                                   matriz_voz, args.umbral_voz,
+                                   asistencia=asistencia,
+                                   ajuste_zoom=args.ajuste_zoom)
             if r is None:
                 return
             etiqueta_nueva = etiqueta_orador(r["candidato"])
@@ -1141,8 +1192,11 @@ def main():
                 f"WHERE id IN ({marcas})",
                 [etiqueta_nueva, round(r["similitud"], 3)] + tramo["ids"])
             # Para contradecir una etiqueta respaldada por el protocolo se
-            # exige más confianza que para bautizar un tramo sin respaldo
-            exigencia = args.umbral_voz + (
+            # exige más confianza que para bautizar un tramo sin respaldo.
+            # Se parte del umbral YA ajustado por Zoom (r['umbral_usado']),
+            # no del umbral base — si no, el ajuste de identificar_huella()
+            # quedaría anulado aquí mismo.
+            exigencia = r["umbral_usado"] + (
                 EXTRA_SI_ANUNCIADO if tramo["protegido"] else 0.0)
             if r["fuerte"] and r["similitud"] >= exigencia \
                     and etiqueta_nueva != etiqueta_actual:
@@ -1150,17 +1204,19 @@ def main():
                     f"UPDATE participaciones SET orador=? "
                     f"WHERE id IN ({marcas})",
                     [etiqueta_nueva] + tramo["ids"])
+                nota_zoom = (f" (umbral relajado a {r['umbral_usado']:.2f} "
+                            "por asistencia Zoom)" if r["por_zoom"] else "")
                 if etiqueta_actual == ORADOR_DESCONOCIDO:
                     aviso = (f"\n[voz] {hms(tramo['ini'])}–"
                              f"{hms(tramo['fin'])}: identificado: "
                              f"{etiqueta_nueva} (similitud "
-                             f"{r['similitud']:.2f}); corregido en la base "
-                             "de datos.\n")
+                             f"{r['similitud']:.2f}){nota_zoom}; corregido "
+                             "en la base de datos.\n")
                 else:
                     aviso = (f"\n[voz] {hms(tramo['ini'])}–"
                              f"{hms(tramo['fin'])}: la voz corresponde a "
                              f"{etiqueta_nueva} (similitud "
-                             f"{r['similitud']:.2f}), no a "
+                             f"{r['similitud']:.2f}){nota_zoom}, no a "
                              f"\"{etiqueta_actual}\"; corregido en la base "
                              "de datos.\n")
                 print(aviso)
@@ -1221,7 +1277,7 @@ def main():
                 sn[1] += 1
                 tramo["etiqueta"] = ORADOR_DESCONOCIDO
             elif cerrar and etiqueta_nueva != etiqueta_actual \
-                    and r["similitud"] >= args.umbral_voz:
+                    and r["similitud"] >= r["umbral_usado"]:
                 # Similitud alta que NO se aplicó automáticamente: decir
                 # por qué, para poder calibrar. La evidencia queda visible
                 # en revisar.py con el botón "aplicar".
@@ -1414,7 +1470,9 @@ def main():
                         ri = identificar_huella(
                             emb, nombres_voz, matriz_voz,
                             args.umbral_intruso,
-                            margen_min=MARGEN_INTRUSO)
+                            margen_min=MARGEN_INTRUSO,
+                            asistencia=asistencia,
+                            ajuste_zoom=args.ajuste_zoom)
                         if ri and ri["fuerte"]:
                             et_i = etiqueta_orador(ri["candidato"])
                             if et_i != estado["orador"] \

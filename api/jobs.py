@@ -67,6 +67,33 @@ def _escribir_perfiles_filtrados(job_id, nombres_encontrados):
     return ruta
 
 
+def _asistencia_por_catalogo(nombres_encontrados, asistencia_cruda):
+    """Traduce {nombre del registro parlamentario: modalidad} a {nombre TAL
+    CUAL está en voces_perfiles.json: modalidad}, con el mismo emparejado
+    por conjunto de palabras que ya usa filtrar_participantes — así el
+    transcriptor puede consultarla directo por el nombre que ya conoce."""
+    if not asistencia_cruda:
+        return {}
+    indice = {_palabras_significativas(n): n for n in nombres_encontrados}
+    mapa = {}
+    for nombre, modalidad in asistencia_cruda.items():
+        real = indice.get(_palabras_significativas(nombre))
+        if real and modalidad:
+            mapa[real] = modalidad
+    return mapa
+
+
+def _escribir_asistencia_filtrada(job_id, mapa):
+    if not mapa:
+        return None
+    carpeta = os.path.join(settings.jobs_dir, job_id)
+    os.makedirs(carpeta, exist_ok=True)
+    ruta = os.path.join(carpeta, "asistencia.json")
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(mapa, f, ensure_ascii=False)
+    return ruta
+
+
 def _asignar_puerto_srt():
     """Primer puerto libre del rango reservado para audio SRT entrante.
     'Libre' = ningún trabajo srt en estado ejecutando lo está usando."""
@@ -166,7 +193,7 @@ def trabajo_activo_por_evento(evento_id):
         return cur.fetchone()
 
 
-def crear_trabajo(usuario_id, datos, evento_id=None):
+def crear_trabajo(usuario_id, datos, evento_id=None, asistencia_cruda=None):
     if datos.modelo not in settings.modelos_permitidos:
         raise ValueError(f"modelo inválido: {datos.modelo}")
     if datos.fuente not in ("youtube", "srt"):
@@ -182,6 +209,8 @@ def crear_trabajo(usuario_id, datos, evento_id=None):
 
     job_id = str(uuid.uuid4())
     ruta_perfiles = _escribir_perfiles_filtrados(job_id, encontrados)
+    ruta_asistencia = _escribir_asistencia_filtrada(
+        job_id, _asistencia_por_catalogo(encontrados, asistencia_cruda))
 
     carpeta = os.path.join(settings.jobs_dir, job_id)
     log_path = os.path.join(carpeta, "salida.log")
@@ -211,6 +240,8 @@ def crear_trabajo(usuario_id, datos, evento_id=None):
         # armando solo, sesion_<id>.wav, mientras la sesión sigue en vivo).
         "--conservar-audio",
     ]
+    if ruta_asistencia:
+        comando += ["--asistencia", ruta_asistencia]
     if datos.fuente == "srt":
         comando += ["--puerto-srt", str(puerto), "--srt-passphrase", passphrase]
 

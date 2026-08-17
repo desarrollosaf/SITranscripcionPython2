@@ -76,13 +76,19 @@ def crear_desde_evento(datos: TrabajoDesdeEvento, usuario=Depends(usuario_actual
             f"{detalle_puerto}) — detenlo antes de crear otro, o úsalo "
             "directamente.")
 
+    # La asistencia (Presencial/Zoom) es informativa nada más: si el
+    # endpoint falla, obtener_asistencia() ya devuelve {} y el trabajo se
+    # crea igual, solo sin ese detalle extra.
+    asistencia_cruda = parlamentario.obtener_asistencia(datos.evento_id)
+
     trabajo = TrabajoCrear(
         url=evento.get("liga") or (evento.get("descripcion") or "")[:200].strip(),
         participantes=participantes,
         modelo=datos.modelo, bloque=datos.bloque,
         fuente="youtube" if evento.get("liga") else "srt")
     try:
-        fila = jobs.crear_trabajo(usuario["id"], trabajo, evento_id=datos.evento_id)
+        fila = jobs.crear_trabajo(usuario["id"], trabajo, evento_id=datos.evento_id,
+                                  asistencia_cruda=asistencia_cruda)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return _a_trabajo_out(fila)

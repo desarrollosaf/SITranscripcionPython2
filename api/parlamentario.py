@@ -27,6 +27,38 @@ def obtener_evento(evento_id, tipo):
     return None
 
 
+def _raiz_eventos():
+    """BASE_URL apunta a '.../api/eventos/ultimoseventos'; el endpoint de
+    asistencia vive un nivel arriba, en '.../api/eventos'."""
+    base = BASE_URL.rstrip("/")
+    return base[:-len("/ultimoseventos")] if base.endswith("/ultimoseventos") else base
+
+
+def obtener_asistencia(evento_id):
+    """Modalidad (Presencial/Remota (zoom)/Justificada/Pendiente) de cada
+    integrante de un evento. Igual que participantes_de_evento(), puede
+    venir plana (Sesión/Diputación permanente) o anidada por comisión
+    (Comisión). Nunca lanza: si el endpoint falla o el evento no trae el
+    dato, se devuelve {} y la creación del trabajo sigue igual, solo sin
+    ese detalle extra."""
+    url = f"{_raiz_eventos()}/asistenciaevento/{evento_id}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            datos = json.loads(r.read().decode("utf-8"))
+        crudos = (datos.get("data") or {}).get("integrantes") or []
+        mapa = {}
+        for item in crudos:
+            if "diputado" in item:
+                mapa[item["diputado"]] = (item.get("asistencia") or "").strip()
+            elif "integrantes" in item:
+                for sub in item["integrantes"]:
+                    if "diputado" in sub:
+                        mapa[sub["diputado"]] = (sub.get("asistencia") or "").strip()
+        return mapa
+    except Exception:
+        return {}
+
+
 def participantes_de_evento(evento):
     """Aplana 'integrantes': en Sesión/Diputación permanente ya es una
     lista plana de {"diputado": nombre}; en Comisión viene anidada por
