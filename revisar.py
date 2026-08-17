@@ -172,12 +172,22 @@ header .sub{color:var(--tenue);font-size:11.5px;text-transform:uppercase;
   letter-spacing:.16em;font-weight:600}
 header .controles{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;
   align-items:center}
-select,input[type=search]{font:inherit;font-size:14.5px;padding:8px 11px;
+select,input[type=search],input[type=text]{font:inherit;font-size:14.5px;padding:8px 11px;
   border:1px solid var(--linea-fuerte);border-radius:var(--r-sm);
   background:var(--panel);color:var(--tinta);max-width:340px}
-select:hover,input[type=search]:hover{border-color:var(--verde)}
-#selSesion{font-weight:600;min-width:170px}
+select:hover,input[type=search]:hover,input[type=text]:hover{border-color:var(--verde)}
 #buscar{min-width:200px}
+.combo-sesion{position:relative;min-width:220px}
+.combo-sesion input{width:100%;font-weight:600;min-width:170px}
+.combo-sesion input:focus{border-color:var(--verde);outline:2px solid var(--verde-suave)}
+.combo-lista{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
+  max-height:320px;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--linea-fuerte);border-radius:var(--r-sm);
+  box-shadow:var(--sombra-barra)}
+.combo-opcion{padding:8px 11px;font-size:14px;cursor:pointer;font-weight:400}
+.combo-opcion:hover,.combo-opcion.resaltado{background:var(--verde-suave);color:var(--verde-hondo)}
+.combo-opcion.vacio{color:var(--tenue);cursor:default}
+.combo-opcion.vacio:hover{background:none;color:var(--tenue)}
 .ver{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:999px;
   background:var(--verde-suave);color:var(--verde);font-size:10px;
   letter-spacing:.06em;vertical-align:middle}
@@ -368,6 +378,12 @@ main{padding:26px 30px 90px;max-width:820px}
 .lanzador .campo input,.lanzador .campo select{max-width:none;font-weight:400}
 .lanzador #lanUrl{min-width:320px}
 .lanzador #lanComisiones{min-width:260px;min-height:96px}
+#camposUrl,#camposEvento{flex-basis:100%;display:flex;flex-wrap:wrap;
+  gap:14px 18px;align-items:flex-end;padding:14px 16px;margin-top:2px;
+  background:var(--papel);border:1px solid var(--linea);border-radius:var(--r-sm)}
+.lanzador .cuerpo-lan>.campo:first-child{flex-basis:100%}
+.lanzador .cuerpo-lan>.campo:has(#lanModelo){margin-top:4px}
+#btnTranscribir{margin-left:auto}
 .lanzador .nota-lan{flex-basis:100%;font-size:12.5px;color:var(--tenue);margin:0}
 .lanzador pre.log-lan{flex-basis:100%;margin:8px 0 0;max-height:220px;
   overflow:auto;background:#1d1f1b;color:#e7e9e3;padding:10px 12px;
@@ -393,7 +409,7 @@ table.tabla-lista .accion{font-size:12.5px;padding:4px 10px}
 @media (max-width:860px){
   header{padding:12px 16px}
   header .controles{width:100%;margin-left:0}
-  #selSesion,#buscar{flex:1 1 45%;min-width:0;max-width:none}
+  .combo-sesion,#buscar{flex:1 1 45%;min-width:0;max-width:none}
   .barra{padding:9px 16px;gap:8px 10px;top:0}
   .grupo{padding-right:10px}
   .grupo-tit{display:none}
@@ -424,7 +440,11 @@ table.tabla-lista .accion{font-size:12.5px;padding:4px 10px}
     <span class="sub">Revisión de oradores <span class="ver">diseño v9</span></span>
   </div>
   <div class="controles">
-    <select id="selSesion" aria-label="Sesión"></select>
+    <div class="combo-sesion" id="comboSesion">
+      <input id="selSesionTxt" type="text" placeholder="— Elige una sesión —"
+             autocomplete="off" aria-label="Sesión">
+      <div class="combo-lista oculto" id="listaSesionesCombo"></div>
+    </div>
     <input id="buscar" type="search" placeholder="Buscar en el texto…"
            aria-label="Buscar en el texto">
     <a id="btnSalir" href="/logout" class="accion" style="display:none;text-decoration:none">Cerrar sesión</a>
@@ -614,6 +634,65 @@ function mdAhtml(texto){
 }
 
 const norm = s => s.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase();
+
+// Selector de sesión con buscador (reemplaza al <select> nativo, que se
+// vuelve incómodo con muchas sesiones). onChange(id) se dispara al elegir
+// una opción de verdad (id=0 vacía la vista); setValor(id,false) solo
+// pinta el texto sin disparar nada (para refrescos/auto-selección).
+const ComboSesion = {
+  opciones: [], filtro: '', resaltado: -1, valorActual: 0, onChange: null,
+  init(){
+    this.elInput = $('#selSesionTxt'); this.elLista = $('#listaSesionesCombo');
+    this.elInput.addEventListener('input', () => {
+      this.filtro = this.elInput.value; this.resaltado = -1; this.pintar();
+    });
+    this.elInput.addEventListener('focus', () => {
+      this.filtro = ''; this.elInput.select(); this.pintar();
+    });
+    this.elInput.addEventListener('blur', () => setTimeout(() => this.cerrar(), 150));
+    this.elInput.addEventListener('keydown', e => this.tecla(e));
+  },
+  cargar(opciones){ this.opciones = opciones; this.setValor(this.valorActual, false); },
+  filtradas(){
+    if(!this.filtro) return this.opciones;
+    const f = norm(this.filtro);
+    return this.opciones.filter(o => norm(o.label).includes(f));
+  },
+  pintar(){
+    const lista = this.filtradas();
+    this.elLista.innerHTML = lista.length
+      ? lista.map((o,i) => '<div class="combo-opcion'+(i===this.resaltado?' resaltado':'')
+          +'" data-id="'+o.id+'">'+esc(o.label)+'</div>').join('')
+      : '<div class="combo-opcion vacio">Sin resultados</div>';
+    this.elLista.classList.remove('oculto');
+    this.elLista.querySelectorAll('.combo-opcion[data-id]').forEach(d => {
+      d.onmousedown = e => { e.preventDefault(); this.elegir(+d.dataset.id); };
+    });
+  },
+  cerrar(){
+    this.elLista.classList.add('oculto');
+    const actual = this.opciones.find(o => o.id === this.valorActual);
+    this.elInput.value = actual ? actual.label : '';
+    this.filtro = '';
+  },
+  tecla(e){
+    const lista = this.filtradas();
+    if(e.key === 'ArrowDown'){ e.preventDefault();
+      this.resaltado = Math.min(lista.length-1, this.resaltado+1); this.pintar(); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault();
+      this.resaltado = Math.max(0, this.resaltado-1); this.pintar(); }
+    else if(e.key === 'Enter'){ e.preventDefault();
+      const o = lista[this.resaltado]; if(o) this.elegir(o.id); }
+    else if(e.key === 'Escape'){ this.elInput.blur(); }
+  },
+  elegir(id){ this.setValor(id, true); this.elLista.classList.add('oculto'); this.elInput.blur(); },
+  setValor(id, disparar){
+    this.valorActual = id;
+    const o = this.opciones.find(x => x.id === id);
+    this.elInput.value = o ? o.label : '';
+    if(disparar && this.onChange) this.onChange(id);
+  },
+};
 const hmsDe = seg => { seg=Math.floor(seg);
   const h=String(Math.floor(seg/3600)).padStart(2,'0'),
         m=String(Math.floor(seg%3600/60)).padStart(2,'0'),
@@ -1024,6 +1103,8 @@ function limpiarVista(){
 }
 
 async function iniciar(){
+  ComboSesion.init();
+  ComboSesion.onChange = id => { if(id) cargarSesion(id); else limpiarVista(); };
   estado.catalogo = await api('/api/catalogo');
   estado.sesiones = await api('/api/sesiones');
   if(!estado.sesiones.length){
@@ -1032,15 +1113,8 @@ async function iniciar(){
       +'Corre primero <code>transcribir_en_vivo.py</code> y vuelve aquí.</p>';
     return;
   }
-  $('#selSesion').innerHTML =
-    '<option value="" selected>— Elige una sesión —</option>'
-    + estado.sesiones.map(s =>
-      '<option value="'+s.id+'">#'+s.id+' — '
-      +esc((s.titulo||'').slice(0,60))+' ('+s.segmentos+' seg.)</option>').join('');
-  $('#selSesion').onchange = e => {
-    const id = +e.target.value;
-    if(id) cargarSesion(id); else limpiarVista();
-  };
+  ComboSesion.cargar(estado.sesiones.map(s => ({id:s.id,
+    label:'#'+s.id+' — '+(s.titulo||'').slice(0,60)+' ('+s.segmentos+' seg.)'})));
   $('#buscar').oninput = e => {estado.q = e.target.value; pintarTranscripcion();};
   
   $('#btnCompactar').onclick = async () => {
@@ -1139,17 +1213,10 @@ async function iniciar(){
 async function refrescarSelectorSesiones(){
   estado.sesiones = await api('/api/sesiones');
   if(!estado.sesiones.length) return;
-  const sel = $('#selSesion');
-  const previa = sel.value;
-  sel.innerHTML = '<option value="">— Elige una sesión —</option>'
-    + estado.sesiones.map(s =>
-      '<option value="'+s.id+'">#'+s.id+' — '
-      +esc((s.titulo||'').slice(0,60))+' ('+s.segmentos+' seg.)</option>').join('');
-  sel.onchange = e => {
-    const id = +e.target.value;
-    if(id) cargarSesion(id); else limpiarVista();
-  };
-  sel.value = previa;   // conserva lo elegido (o la opción vacía)
+  // cargar() vuelve a pintar con lo que ya tenía elegido (valorActual no se
+  // toca), así que conserva la selección sin necesidad de guardarla aparte.
+  ComboSesion.cargar(estado.sesiones.map(s => ({id:s.id,
+    label:'#'+s.id+' — '+(s.titulo||'').slice(0,60)+' ('+s.segmentos+' seg.)'})));
 }
 
 function pintarEstadoLan(est){
@@ -1190,7 +1257,7 @@ async function vigilarTranscripcion(){
       await refrescarSelectorSesiones();
       if(!estado.sesion && estado.sesiones.length){
         const viva = estado.sesiones[0].id;   // la más reciente (id DESC)
-        $('#selSesion').value = String(viva);
+        ComboSesion.setValor(viva, false);
         await cargarSesion(viva);
       }
     } else {
