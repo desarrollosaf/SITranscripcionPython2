@@ -60,6 +60,9 @@ _RUTAS_NO_ADMIN = {
     "/api/esteno/audio",
     "/api/esteno/tomar", "/api/esteno/latido", "/api/esteno/soltar",
     "/api/esteno/guardar",
+    # Reutilizada por el editor del corrector para partir un turno en dos
+    # oradores; el handler mismo exige que sea dentro de su bloque abierto.
+    "/api/dividir",
 }
 
 # Se rellenan en main() solo si --requiere-login está activo.
@@ -1506,6 +1509,16 @@ table.plan th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color
 .pill-audio{font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px}
 .pill-audio.si{background:var(--verde-suave);color:var(--verde)}
 .pill-audio.no{background:var(--rojo-suave);color:var(--rojo)}
+.pie-seg{display:flex;gap:8px;margin-top:8px}
+.divisor{margin-top:10px;padding:12px;border:1px solid var(--linea);border-radius:8px;background:var(--papel)}
+.divisor .ayuda{margin:0 0 8px;color:var(--tenue);font-size:13px}
+.divisor .frases{font:15px/1.8 Georgia,"Times New Roman",serif}
+.divisor .frase{cursor:pointer;padding:1px 3px;border-radius:4px}
+.divisor .frase:hover{background:var(--verde-suave)}
+.divisor .frase.p2{background:#F4E7CE}
+.split-oradores{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+.split-oradores label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--tenue)}
+.split-oradores input{font:inherit;padding:6px 9px;border:1px solid var(--linea-fuerte);border-radius:6px}
 @media(max-width:640px){.seg{grid-template-columns:1fr}main{padding:16px}}
 </style>
 </head>
@@ -1517,6 +1530,7 @@ table.plan th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color
   </div>
   <div class="der">
     <span id="rol" class="rol"></span>
+    <a id="lnkOtraSesion" href="/esteno" class="btn chico" style="display:none">← Elegir otra sesión</a>
     <a id="lnkPrincipal" href="/" class="btn chico">← Revisión principal</a>
     <a href="/logout" class="btn chico">Cerrar sesión</a>
   </div>
@@ -1531,7 +1545,7 @@ const S = {
   sesion: parseInt(params.get('sesion')||'0',10) || 0,
   // corrector/esAdmin ya NO salen de la URL: se resuelven en iniciar()
   // contra /api/yo, con la cuenta con la que de verdad iniciaste sesión.
-  corrector: null, esAdmin: false, usuarios: [],
+  corrector: null, esAdmin: false, usuarios: [], filtroCorrector: '',
   miSlot: null, config:null, bloques:[], total:0, audio:false, sesionInfo:null,
   abierto:null, segmentos:[], timerEstado:null, timerLatido:null, au:null, nombres:[],
 };
@@ -1659,9 +1673,30 @@ function pintarFilasCorrectores(){
 function panelPlanHTML(){
   const pr=S.progreso||{terminados:0,total:0};
   const pct = pr.total? Math.round(100*pr.terminados/pr.total):0;
+  // Quién ha tocado esta sesión: la lista del plan + cualquiera que haya
+  // ayudado en un bloque de otro turno (no solo los nombres configurados).
+  const personas = new Set();
+  (S.config.nombres||[]).forEach(n=> n && personas.add(n));
+  S.bloques.forEach(b=>{
+    if(b.tomado_por) personas.add(b.tomado_por);
+    if(b.terminado_por) personas.add(b.terminado_por);
+  });
+  const opcsFiltro = '<option value="">— todos —</option>' +
+    Array.from(personas).sort().map(n=> '<option value="'+esc(n)+'"'
+      + (S.filtroCorrector===n?' selected':'')+'>'+esc(n)+'</option>').join('');
+  const urlWord = S.filtroCorrector
+    ? '/api/exportar_word?sesion='+S.sesion+'&corrector='+encodeURIComponent(S.filtroCorrector)
+    : '';
   return '<div class="barra-prog"><span style="width:'+pct+'%"></span></div>'+
     '<p class="ayuda">'+pr.terminados+' de '+pr.total+' bloques terminados ('+pct+'%). '+
     'Duración de la sesión: '+hms(S.total)+'. Se actualiza solo (sin borrar tu formulario).</p>'+
+    '<div class="fila" style="align-items:flex-end">'+
+    '<label class="campo" style="max-width:320px">Ver bloques de'+
+    '<select id="filtroCorrector">'+opcsFiltro+'</select></label>'+
+    (urlWord ? '<a class="btn chico" href="'+esc(urlWord)+'" target="_blank" '
+      + 'title="Word con solo los tramos que tomó o terminó esta persona">'
+      + '📄 Descargar Word de esta persona</a>' : '')+
+    '</div>'+
     tablaPlan();
 }
 function cablearReasignar(){
@@ -1669,20 +1704,29 @@ function cablearReasignar(){
     try{ await api('/api/esteno/reasignar',{sesion_id:S.sesion,indice:parseInt(sel.dataset.reasignar,10),slot:parseInt(sel.value,10)});
       await cargarEstado(); refrescarPlan(); }catch(err){ avisar(err.message); }
   });
+  const filtro = $('#filtroCorrector');
+  if(filtro) filtro.onchange = () => { S.filtroCorrector = filtro.value; refrescarPlan(); };
 }
 // Refresca SOLO el panel de avance/plan; nunca vuelve a dibujar el formulario.
 function refrescarPlan(){
   const cont=document.getElementById('panelPlan');
   if(!cont) return;
   const a=document.activeElement;
-  if(a && a.matches && a.matches('select[data-reasignar]')) return; // no interrumpir
+  if(a && a.matches && (a.matches('select[data-reasignar]') || a.id==='filtroCorrector')) return; // no interrumpir
   cont.innerHTML = panelPlanHTML();
   cablearReasignar();
 }
 function tablaPlan(){
   const N=S.config.num_correctores;
+  const filtro = S.filtroCorrector;
+  const bloques = filtro
+    ? S.bloques.filter(b=> b.tomado_por===filtro || b.terminado_por===filtro)
+    : S.bloques;
+  if(filtro && !bloques.length){
+    return '<p class="ayuda">'+esc(filtro)+' todavía no ha tocado ningún bloque de esta sesión.</p>';
+  }
   let r='<table class="plan"><thead><tr><th>#</th><th>Tramo</th><th>Asignado</th><th>Estado</th><th>Segmentos</th></tr></thead><tbody>';
-  S.bloques.forEach(b=>{
+  bloques.forEach(b=>{
     let opts=''; for(let i=0;i<N;i++) opts+='<option value="'+i+'"'+(i===b.slot?' selected':'')+'>'+esc(nombreSlot(i))+'</option>';
     let est='<span class="badge pend">pendiente</span>';
     if(b.estado==='editando') est='<span class="badge edit">editando · '+esc(b.tomado_por||'')+(b.vencido?' (inactivo)':'')+'</span>';
@@ -1778,8 +1822,11 @@ function vistaEditor(){
     '<span class="sep"></span>'+
     '<button data-cmd="removeFormat" title="Quitar formato">Sin fmt</button>'+
     '</div>';
-  let segs = turnos.map(t => {
+  let segs = turnos.map((t,i) => {
     const contenidoHTML = t.texto || '';
+    const btnUnir = i < turnos.length-1
+      ? '<button class="btn chico b-unir" title="Pegar este turno con el siguiente">🔗 Unir con el siguiente</button>'
+      : '';
     return '<div class="seg" data-ids="'+t.ids.join(',')+'">'+
       '<button class="t" data-t="'+t.inicio_seg+'">'+esc(t.inicio_hms||hms(t.inicio_seg))+' ▸</button>'+
       '<div class="campos">'+
@@ -1789,12 +1836,16 @@ function vistaEditor(){
         '</div>'+
         barraFmt+
         '<div class="editor-rico" contenteditable="true" spellcheck="true">'+contenidoHTML+'</div>'+
+        '<div class="pie-seg">'+btnUnir+
+          '<button class="btn chico b-dividir" title="Partir este turno en dos oradores">✂ Dividir</button>'+
+        '</div>'+
       '</div></div>';
   }).join('');
   segs = datalist + segs;
   app.innerHTML =
     '<div class="editor-cab">'+
       '<div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-bottom:10px">'+
+        '<button class="btn chico" id="bVolver" title="Suelta este bloque sin guardar y regresa a la lista">← Volver a mis bloques</button>'+
         '<strong>Bloque '+(b.indice+1)+'</strong>'+
         '<span style="color:var(--tenue);font-size:13px">'+hms(b.inicio_seg)+' – '+hms(b.fin_seg)+'</span>'+
         (S.audio?'':'<span class="pill-audio no">sin audio</span>')+
@@ -1822,11 +1873,14 @@ function vistaEditor(){
   $('#bTerm').onclick=()=>guardar(true);
   $('#bAvance').onclick=()=>guardar(false);
   $('#bCerrar').onclick=cerrar;
+  $('#bVolver').onclick=cerrar;
   app.querySelectorAll('.seg .t').forEach(t=> t.onclick=()=>{ if(S.au){ S.au.currentTime=parseFloat(t.dataset.t); S.au.play(); actualizarPlay(); } });
   app.querySelectorAll('.seg .pick').forEach(sel=> sel.onchange=()=>{
     if(!sel.value) return;
     sel.closest('.campos').querySelector('.orador').value=sel.value; sel.value='';
   });
+  app.querySelectorAll('.seg .b-unir').forEach(b=> b.onclick=()=>unirConSiguiente(b));
+  app.querySelectorAll('.seg .b-dividir').forEach(b=> b.onclick=()=>dividirAqui(b));
   // Barra de formato: execCommand sobre el editor enfocado
   app.querySelectorAll('.barra-fmt button[data-cmd]').forEach(btn=>{
     btn.onmousedown=e=>{
@@ -1910,6 +1964,108 @@ function agruparTurnos(segs){
   return turnos;
 }
 
+// Pega este turno con el siguiente: sirve para el caso típico de un turno
+// vacío (Whisper cortó sin detectar orador) que en realidad es del mismo
+// que sigue. Es puro DOM — no toca el servidor hasta que se guarde.
+function unirConSiguiente(boton){
+  const cont = boton.closest('.seg');
+  const sig = cont.nextElementSibling;
+  if(!sig || !sig.classList.contains('seg')) return;
+  cont.dataset.ids = cont.dataset.ids.split(',')
+    .concat(sig.dataset.ids.split(',')).join(',');
+  const orA = cont.querySelector('.orador');
+  const orB = sig.querySelector('.orador');
+  if(!orA.value.trim()) orA.value = orB.value;
+  const edA = cont.querySelector('.editor-rico');
+  const edB = sig.querySelector('.editor-rico');
+  const htmlA = edA.innerHTML.trim(), htmlB = edB.innerHTML.trim();
+  edA.innerHTML = (htmlA && htmlB) ? (htmlA + ' ' + htmlB) : (htmlA || htmlB);
+  // Si el turno pegado ya era el último, este pasa a serlo.
+  if(!sig.nextElementSibling) cont.querySelector('.b-unir').remove();
+  sig.remove();
+  avisar('Turnos unidos — no olvides guardar.');
+}
+
+// Vuelve a pedir el bloque abierto (vía /api/esteno/tomar, que ya lo tiene
+// tomado, así que solo refresca) para traer los segmentos tal como quedaron
+// después de un /api/dividir en el servidor.
+async function refrescarSegmentosAbiertos(){
+  const b = S.abierto;
+  const r = await api('/api/esteno/tomar',
+    {sesion_id:S.sesion, indice:b.indice, corrector:S.corrector||'anónimo'});
+  S.abierto = r.bloque; S.segmentos = r.segmentos;
+}
+
+// Divide un turno en dos oradores, apoyándose en /api/dividir (la misma
+// ruta que usa la pantalla principal) — necesita el texto SIN formato de
+// los segmentos originales, porque el corte se calcula por caracteres
+// sobre lo que hay guardado en la base. Si el turno ya tiene formato
+// (negritas, etc.) de una edición previa, no se puede dividir así de
+// seguro: se le pide al corrector que guarde primero y reabra el bloque.
+function dividirAqui(boton){
+  document.querySelectorAll('.divisor').forEach(e=> e.remove());
+  const cont = boton.closest('.seg');
+  const ids = cont.dataset.ids.split(',').map(Number);
+  const segs = ids.map(id => S.segmentos.find(s=> s.id===id)).filter(Boolean);
+  if(!segs.length) return;
+  if(segs.some(s=> (s.texto||'').indexOf('<') !== -1)){
+    avisar('Este turno ya tiene formato aplicado; guarda el avance y vuelve '
+          + 'a abrir el bloque para dividirlo mientras siga en texto plano.');
+    return;
+  }
+  const full = segs.map(s=> s.texto||'').join(' ');
+  const frases = []; let m; const rex = /[^.?!]+[.?!]*\\s*/g;
+  while((m = rex.exec(full)) !== null){
+    if(m[0].trim()) frases.push({txt:m[0].trim(), off:m.index});
+    if(rex.lastIndex === m.index) rex.lastIndex++;
+  }
+  if(frases.length < 2){
+    avisar('Muy corto para dividir por frases.');
+    return;
+  }
+  const panel = document.createElement('div');
+  panel.className = 'divisor';
+  panel.innerHTML =
+    '<p class="ayuda">Haz clic en la frase donde empieza el '
+    + '<strong>segundo orador</strong>:</p>'
+    + '<div class="frases">'
+    + frases.map((f,k)=> '<span class="frase" data-k="'+k+'" data-off="'
+        + f.off+'">'+esc(f.txt)+'</span>').join(' ')
+    + '</div>'
+    + '<div class="split-oradores" hidden>'
+    + '<label>1ª parte <input class="o1" list="dlNombres"></label>'
+    + '<label>2ª parte <input class="o2" list="dlNombres"></label>'
+    + '<button class="btn pri chico b-div-ok">Dividir aquí</button>'
+    + '<button class="btn chico b-div-cancelar">Cancelar</button></div>';
+  cont.querySelector('.campos').appendChild(panel);
+  let corte = null;
+  const panelO = panel.querySelector('.split-oradores');
+  panel.querySelectorAll('.frase').forEach(sp => sp.onclick = () => {
+    const k = +sp.dataset.k;
+    if(k === 0){ avisar('Elige una frase posterior a la primera.'); return; }
+    corte = +sp.dataset.off;
+    panel.querySelectorAll('.frase').forEach((s,j)=> s.classList.toggle('p2', j>=k));
+    panelO.hidden = false;
+    panelO.querySelector('.o1').value = cont.querySelector('.orador').value;
+    panelO.querySelector('.o2').focus();
+  });
+  panel.querySelector('.b-div-cancelar').onclick = () => panel.remove();
+  panel.querySelector('.b-div-ok').onclick = async () => {
+    const o1 = panelO.querySelector('.o1').value.trim();
+    const o2 = panelO.querySelector('.o2').value.trim();
+    if(corte === null || !o1 || !o2){
+      avisar('Marca la frase y escribe los dos oradores.'); return;
+    }
+    try{
+      await api('/api/dividir',
+        {sesion_id:S.sesion, ids, corte, orador1:o1, orador2:o2});
+      avisar('Turno dividido.');
+      await refrescarSegmentosAbiertos();
+      vistaEditor();
+    }catch(e){ avisar(e.message); }
+  };
+}
+
 // Al guardar: el orador se aplica a TODOS los segmentos del turno; el texto
 // (ya unido y corregido) se guarda en el PRIMER segmento y los demás quedan
 // vacíos, para no duplicar. Se conservan ids y tiempos (audio intacto).
@@ -1977,8 +2133,12 @@ async function iniciar(){
     const yo = await api('/api/yo');
     S.corrector = yo.email; S.esAdmin = !!yo.es_admin;
     // Para un corrector, "/" solo lo regresa aquí mismo (no tiene acceso) —
-    // ese link no pinta nada; que se quede solo "Cerrar sesión".
-    if(!S.esAdmin){ const l=$('#lnkPrincipal'); if(l) l.style.display='none'; }
+    // ese link no pinta nada; en su lugar le damos uno para cambiar de
+    // sesión (el admin ya tiene su propio selector en la pantalla).
+    if(!S.esAdmin){
+      const l=$('#lnkPrincipal'); if(l) l.style.display='none';
+      const o=$('#lnkOtraSesion'); if(o) o.style.display='';
+    }
   }catch(e){
     app.innerHTML = '<div class="tarjeta"><h2>No se pudo verificar tu sesión</h2>'
       + '<p class="ayuda">Vuelve a <a href="/login">iniciar sesión</a>.</p></div>';
@@ -3845,18 +4005,34 @@ class Manejador(BaseHTTPRequestHandler):
             if not sid:
                 return self._responder({"error": "Falta el ID de la sesión"},
                                        codigo=400)
+            # Si se pide 'corrector', el Word sale acotado solo a los
+            # tramos que esa persona tomó o terminó en el módulo
+            # estenográfico — para que el admin pueda revisar puntualmente
+            # qué escribió, sin tener que abrir el editor en vivo.
+            corrector = (q.get("corrector", [""])[0] or "").strip()
             con = self._db()
             try:
                 ses = con.execute("SELECT * FROM sesiones WHERE id=?",
                                   (sid,)).fetchone()
                 filas = con.execute(
-                    "SELECT id, orador, texto FROM participaciones "
+                    "SELECT id, orador, texto, inicio_seg FROM participaciones "
                     "WHERE sesion_id=? ORDER BY inicio_seg", (sid,)).fetchall()
-                # Resúmenes ejecutivos guardados (si la tabla existe)
+                rangos_corrector = None
+                if corrector:
+                    rangos_corrector = con.execute(
+                        "SELECT inicio_seg, fin_seg FROM esteno_bloques "
+                        "WHERE sesion_id=? AND (tomado_por=? OR "
+                        "terminado_por=?)", (sid, corrector, corrector)
+                    ).fetchall()
+                    filas = [f for f in filas if any(
+                        r["inicio_seg"] <= f["inicio_seg"] < r["fin_seg"]
+                        for r in rangos_corrector)]
+                # Resúmenes ejecutivos guardados (si la tabla existe) — no
+                # aplican al recorte por corrector, son de la sesión completa.
                 try:
-                    resumenes = con.execute(
+                    resumenes = ([] if corrector else con.execute(
                         "SELECT orador, resumen FROM resumenes "
-                        "WHERE sesion_id=? ORDER BY ancla_id", (sid,)).fetchall()
+                        "WHERE sesion_id=? ORDER BY ancla_id", (sid,)).fetchall())
                 except sqlite3.Error:
                     resumenes = []
                 # Estructura (encabezados del orden del día), si existe
@@ -3929,6 +4105,15 @@ class Manejador(BaseHTTPRequestHandler):
             p_fecha.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p_fecha.runs[0].font.size = Pt(10)
             p_fecha.runs[0].font.italic = True
+
+            if corrector:
+                p_corr = doc.add_paragraph(
+                    "Tramos corregidos por: " + corrector + "  ("
+                    + ", ".join(hms(r["inicio_seg"]) + "–" + hms(r["fin_seg"])
+                                for r in rangos_corrector) + ")")
+                p_corr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_corr.runs[0].font.size = Pt(10)
+                p_corr.runs[0].font.italic = True
 
             doc.add_paragraph("-" * 65).alignment = WD_ALIGN_PARAGRAPH.CENTER
             
@@ -4008,9 +4193,13 @@ class Manejador(BaseHTTPRequestHandler):
                 "Content-Type",
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document")
+            nombre_archivo = f"Sesion_{sid}.docx"
+            if corrector:
+                sufijo = re.sub(r"[^A-Za-z0-9]+", "_", corrector.split("@")[0])
+                nombre_archivo = f"Sesion_{sid}_{sufijo}.docx"
             self.send_header(
                 "Content-Disposition",
-                f"attachment; filename=Sesion_{sid}.docx")
+                f"attachment; filename={nombre_archivo}")
             self.send_header("Content-Length", str(len(datos_docx)))
             self.end_headers()
             self.wfile.write(datos_docx)
@@ -4125,6 +4314,28 @@ class Manejador(BaseHTTPRequestHandler):
                 if not (ids and orador1 and orador2):
                     return self._responder({"error": "faltan datos"},
                                            codigo=400)
+                if not self._usuario_actual_admin():
+                    # Un corrector solo puede dividir dentro del bloque
+                    # estenográfico que tiene abierto ahora mismo (no
+                    # cualquier fila de la sesión).
+                    email = self._usuario_actual_email()
+                    filas_chk = con.execute(
+                        f"SELECT inicio_seg FROM participaciones WHERE "
+                        f"id IN ({','.join('?' * len(ids))}) AND "
+                        f"sesion_id=?", ids + [sid]).fetchall()
+                    bloques_corrector = con.execute(
+                        "SELECT inicio_seg, fin_seg FROM esteno_bloques "
+                        "WHERE sesion_id=? AND tomado_por=? AND "
+                        "estado='editando'", (sid, email)).fetchall()
+                    propios = len(filas_chk) == len(ids) and all(
+                        any(b["inicio_seg"] <= f["inicio_seg"] < b["fin_seg"]
+                            for b in bloques_corrector)
+                        for f in filas_chk)
+                    if not propios:
+                        return self._responder(
+                            {"error": "Solo puedes dividir segmentos del "
+                                      "bloque que tienes abierto"},
+                            codigo=403)
                 cols = {r[1] for r in con.execute(
                     "PRAGMA table_info(participaciones)")}
                 limpiar = (", revisado_ia=NULL, motivo_ia=NULL"
