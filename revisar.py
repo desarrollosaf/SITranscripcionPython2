@@ -376,6 +376,19 @@ main{padding:26px 30px 90px;max-width:820px}
 .lanzador .estado-lan{flex-basis:100%;font-size:13px;font-weight:600}
 .lanzador .estado-lan.corriendo{color:var(--ambar)}
 .lanzador .estado-lan.fin{color:var(--verde)}
+#listaTrabajosApi,#listaUsuarios{flex-basis:100%}
+.tabla-scroll{max-height:280px;overflow-y:auto;
+  border:1px solid var(--linea);border-radius:var(--r-sm);margin-top:8px}
+table.tabla-lista{width:100%;border-collapse:collapse;font-size:13px}
+table.tabla-lista thead th{position:sticky;top:0;background:var(--panel);
+  text-align:left;padding:7px 10px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.04em;color:var(--tenue);
+  border-bottom:1px solid var(--linea-fuerte)}
+table.tabla-lista tbody td{padding:7px 10px;border-bottom:1px solid var(--linea);
+  vertical-align:top}
+table.tabla-lista tbody tr:last-child td{border-bottom:none}
+table.tabla-lista tbody tr:hover{background:var(--verde-suave)}
+table.tabla-lista .accion{font-size:12.5px;padding:4px 10px}
 
 @media (max-width:860px){
   header{padding:12px 16px}
@@ -1318,21 +1331,22 @@ async function cargarTrabajosApi(){
     cont.innerHTML = '<p class="nota-lan">No hay trabajos creados por la API todavía.</p>';
     return;
   }
-  cont.innerHTML = trabajos.map(t => {
-    const activo = t.estado === 'ejecutando' || t.estado === 'deteniendo';
-    const detalle = t.fuente === 'srt' ? ('SRT, puerto ' + t.puerto) : 'YouTube';
-    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;'
-      + 'border-bottom:1px solid var(--linea)">'
-      + '<div style="flex:1">'
-      + '<strong>' + esc((t.url || '').slice(0, 70)) + '</strong><br>'
-      + '<span class="nota-lan">' + esc(detalle) + ' · ' + esc(t.estado)
-      + (t.sesion_id ? ' · sesión #' + t.sesion_id : '') + '</span>'
-      + '</div>'
-      + (activo
-         ? '<button class="accion" data-id="' + esc(t.id) + '">Detener</button>'
-         : '<span class="nota-lan">detenido</span>')
-      + '</div>';
-  }).join('');
+  cont.innerHTML = '<div class="tabla-scroll"><table class="tabla-lista">'
+    + '<thead><tr><th>URL / etiqueta</th><th>Fuente</th><th>Estado</th>'
+    + '<th>Sesión</th><th></th></tr></thead><tbody>'
+    + trabajos.map(t => {
+      const activo = t.estado === 'ejecutando' || t.estado === 'deteniendo';
+      const detalle = t.fuente === 'srt' ? ('SRT, puerto ' + t.puerto) : 'YouTube';
+      return '<tr><td>' + esc((t.url || '').slice(0, 70)) + '</td>'
+        + '<td>' + esc(detalle) + '</td>'
+        + '<td>' + esc(t.estado) + '</td>'
+        + '<td>' + (t.sesion_id ? '#' + t.sesion_id : '—') + '</td>'
+        + '<td>' + (activo
+           ? '<button class="accion" data-id="' + esc(t.id) + '">Detener</button>'
+           : '<span class="nota-lan">—</span>')
+        + '</td></tr>';
+    }).join('')
+    + '</tbody></table></div>';
   cont.querySelectorAll('button[data-id]').forEach(b => {
     b.onclick = async () => {
       b.disabled = true;
@@ -1358,11 +1372,11 @@ async function cargarUsuarios(){
   const cont = $('#listaUsuarios');
   cont.innerHTML = !r.length
     ? '<p class="nota-lan">Aún no hay usuarios.</p>'
-    : '<table style="width:100%;font-size:13px;margin-top:8px">'
-      + r.map(u => '<tr><td style="padding:3px 6px 3px 0">' + esc(u.email)
-        + '</td><td style="padding:3px 0;color:var(--tenue,#666)">'
+    : '<div class="tabla-scroll"><table class="tabla-lista">'
+      + '<thead><tr><th>Email</th><th>Rol</th></tr></thead><tbody>'
+      + r.map(u => '<tr><td>' + esc(u.email) + '</td><td>'
         + (u.es_admin ? 'administrador' : 'operador') + '</td></tr>').join('')
-      + '</table>';
+      + '</tbody></table></div>';
 }
 $('#btnRefrescarUsuarios').onclick = cargarUsuarios;
 $('#btnCrearUsuario').onclick = async () => {
@@ -1687,6 +1701,7 @@ function panelPlanHTML(){
   const urlWord = S.filtroCorrector
     ? '/api/exportar_word?sesion='+S.sesion+'&corrector='+encodeURIComponent(S.filtroCorrector)
     : '';
+  const urlWordAutores = '/api/exportar_word?sesion='+S.sesion+'&marcar_autores=1';
   return '<div class="barra-prog"><span style="width:'+pct+'%"></span></div>'+
     '<p class="ayuda">'+pr.terminados+' de '+pr.total+' bloques terminados ('+pct+'%). '+
     'Duración de la sesión: '+hms(S.total)+'. Se actualiza solo (sin borrar tu formulario).</p>'+
@@ -1696,6 +1711,10 @@ function panelPlanHTML(){
     (urlWord ? '<a class="btn chico" href="'+esc(urlWord)+'" target="_blank" '
       + 'title="Word con solo los tramos que tomó o terminó esta persona">'
       + '📄 Descargar Word de esta persona</a>' : '')+
+    '<a class="btn chico" href="'+esc(urlWordAutores)+'" target="_blank" '
+      + 'title="Word completo (todos los oradores), con una nota antes de '
+      + 'cada tramo diciendo quién lo corrigió">'
+      + '📄 Descargar Word con autores marcados</a>'+
     '</div>'+
     tablaPlan();
 }
@@ -1705,7 +1724,15 @@ function cablearReasignar(){
       await cargarEstado(); refrescarPlan(); }catch(err){ avisar(err.message); }
   });
   const filtro = $('#filtroCorrector');
-  if(filtro) filtro.onchange = () => { S.filtroCorrector = filtro.value; refrescarPlan(); };
+  if(filtro) filtro.onchange = () => {
+    // Redibuja de inmediato: refrescarPlan() se frena a propósito cuando
+    // el foco sigue en este mismo select (para que el auto-refresco cada
+    // 4 s no te lo cierre a medio uso) — pero aquí SÍ acabas de elegir,
+    // así que no hay que esperar al siguiente ciclo.
+    S.filtroCorrector = filtro.value;
+    const cont = document.getElementById('panelPlan');
+    if(cont){ cont.innerHTML = panelPlanHTML(); cablearReasignar(); }
+  };
 }
 // Refresca SOLO el panel de avance/plan; nunca vuelve a dibujar el formulario.
 function refrescarPlan(){
@@ -4010,6 +4037,10 @@ class Manejador(BaseHTTPRequestHandler):
             # estenográfico — para que el admin pueda revisar puntualmente
             # qué escribió, sin tener que abrir el editor en vivo.
             corrector = (q.get("corrector", [""])[0] or "").strip()
+            # 'marcar_autores': Word completo (todos los oradores), pero con
+            # una nota antes de cada tramo diciendo quién lo corrigió — para
+            # revisar de un vistazo sin tener que sacar un Word por persona.
+            marcar_autores = (q.get("marcar_autores", ["0"])[0] or "") == "1"
             con = self._db()
             try:
                 ses = con.execute("SELECT * FROM sesiones WHERE id=?",
@@ -4027,6 +4058,11 @@ class Manejador(BaseHTTPRequestHandler):
                     filas = [f for f in filas if any(
                         r["inicio_seg"] <= f["inicio_seg"] < r["fin_seg"]
                         for r in rangos_corrector)]
+                bloques_autor = (con.execute(
+                    "SELECT inicio_seg, fin_seg, tomado_por, terminado_por "
+                    "FROM esteno_bloques WHERE sesion_id=? "
+                    "ORDER BY inicio_seg", (sid,)).fetchall()
+                    if marcar_autores else [])
                 # Resúmenes ejecutivos guardados (si la tabla existe) — no
                 # aplican al recorte por corrector, son de la sesión completa.
                 try:
@@ -4052,7 +4088,7 @@ class Manejador(BaseHTTPRequestHandler):
                                for s in estructura.get("secciones", [])
                                if s.get("ancla_id") is not None}
 
-            from docx.shared import Inches, Pt, Cm
+            from docx.shared import Inches, Pt, Cm, RGBColor
             from docx.enum.text import WD_ALIGN_PARAGRAPH
             doc = Document()
 
@@ -4151,10 +4187,42 @@ class Manejador(BaseHTTPRequestHandler):
                     volcar_intervencion(orador_actual,
                                         "\n".join(buffer_texto).strip())
 
+            def agregar_marcador_autor(autor):
+                pm = doc.add_paragraph()
+                pm.paragraph_format.space_before = Pt(10)
+                pm.paragraph_format.space_after = Pt(4)
+                pm.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                run_m = pm.add_run(
+                    "— Tramo corregido por: " + autor + " —" if autor
+                    else "— Tramo sin corrección registrada —")
+                run_m.italic = True
+                run_m.font.size = Pt(9)
+                run_m.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+
+            # Punteros para saber, sobre la marcha, en qué bloque estenográfico
+            # cae cada fila (ambas listas vienen ordenadas por inicio_seg).
+            ptr_bloque = 0
+            idx_bloque_actual = "__ninguno__"  # distinto de None a propósito
+
             for f in filas:
                 texto_segmento = (f['texto'] or "").strip()
                 if not texto_segmento:
                     continue
+                if marcar_autores and bloques_autor:
+                    while (ptr_bloque < len(bloques_autor)
+                           and f['inicio_seg'] >= bloques_autor[ptr_bloque]['fin_seg']):
+                        ptr_bloque += 1
+                    en_bloque = (ptr_bloque < len(bloques_autor)
+                                and f['inicio_seg'] >= bloques_autor[ptr_bloque]['inicio_seg'])
+                    nuevo_idx = ptr_bloque if en_bloque else None
+                    if nuevo_idx != idx_bloque_actual:
+                        vaciar_buffer()
+                        orador_actual = None
+                        buffer_texto = []
+                        idx_bloque_actual = nuevo_idx
+                        b = bloques_autor[nuevo_idx] if nuevo_idx is not None else None
+                        autor = (b["terminado_por"] or b["tomado_por"]) if b else None
+                        agregar_marcador_autor(autor)
                 if f['orador'] != orador_actual:
                     vaciar_buffer()
                     orador_actual = f['orador']
@@ -4197,6 +4265,8 @@ class Manejador(BaseHTTPRequestHandler):
             if corrector:
                 sufijo = re.sub(r"[^A-Za-z0-9]+", "_", corrector.split("@")[0])
                 nombre_archivo = f"Sesion_{sid}_{sufijo}.docx"
+            elif marcar_autores:
+                nombre_archivo = f"Sesion_{sid}_con_autores.docx"
             self.send_header(
                 "Content-Disposition",
                 f"attachment; filename={nombre_archivo}")
