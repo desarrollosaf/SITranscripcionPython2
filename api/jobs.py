@@ -83,15 +83,50 @@ def _asistencia_por_catalogo(nombres_encontrados, asistencia_cruda):
     return mapa
 
 
-def _escribir_asistencia_filtrada(job_id, mapa):
-    if not mapa:
-        return None
+def _ruta_asistencia(job_id):
     carpeta = os.path.join(settings.jobs_dir, job_id)
     os.makedirs(carpeta, exist_ok=True)
-    ruta = os.path.join(carpeta, "asistencia.json")
+    return os.path.join(carpeta, "asistencia.json")
+
+
+def _escribir_asistencia_filtrada(job_id, mapa):
+    """Siempre escribe el archivo (aunque el mapa venga vacío): así el
+    transcriptor ya arranca vigilando esa ruta con --asistencia, listo
+    para que _actualizar_asistencia_periodica() la vaya llenando/
+    actualizando aunque al inicio nadie hubiera registrado su asistencia
+    todavía (gente que llega tarde)."""
+    ruta = _ruta_asistencia(job_id)
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(mapa, f, ensure_ascii=False)
     return ruta
+
+
+ASISTENCIA_INTERVALO_SEG = 300  # cada cuánto se vuelve a consultar mientras
+                                # la sesión sigue en vivo (gente que llega
+                                # tarde a Zoom o a la sala)
+
+
+def _actualizar_asistencia_periodica(job_id, evento_id, encontrados):
+    """Hilo de fondo: mientras el trabajo siga 'ejecutando', vuelve a
+    consultar la asistencia real cada ASISTENCIA_INTERVALO_SEG y reescribe
+    asistencia.json. El transcriptor la relee sola (ver
+    _cargar_asistencia_si_cambio en transcribir_en_vivo_c3.py) — aquí no se
+    toca el proceso para nada, solo el archivo."""
+    from . import parlamentario
+    ruta = _ruta_asistencia(job_id)
+    while True:
+        time.sleep(ASISTENCIA_INTERVALO_SEG)
+        with _lock:
+            entrada = _procesos.get(job_id)
+        if entrada is None or entrada["proc"].poll() is not None:
+            return  # el trabajo ya terminó: nada más que actualizar
+        try:
+            cruda = parlamentario.obtener_asistencia(evento_id)
+            mapa = _asistencia_por_catalogo(encontrados, cruda)
+            with open(ruta, "w", encoding="utf-8") as f:
+                json.dump(mapa, f, ensure_ascii=False)
+        except Exception:
+            pass  # se reintenta solo en el siguiente ciclo
 
 
 def _asignar_puerto_srt():
@@ -266,6 +301,13 @@ def crear_trabajo(usuario_id, datos, evento_id=None, asistencia_cruda=None):
     threading.Thread(target=_detectar_sesion_id,
                       args=(job_id, url_guardada, id_previo, log_path),
                       daemon=True).start()
+    if evento_id:
+        # Gente que llega tarde (a Zoom o a la sala): sin esto, la
+        # asistencia queda congelada tal como estaba al momento de crear
+        # el trabajo durante el resto de la sesión, por larga que sea.
+        threading.Thread(target=_actualizar_asistencia_periodica,
+                         args=(job_id, evento_id, encontrados),
+                         daemon=True).start()
 
     return obtener_trabajo(job_id)
 

@@ -1064,18 +1064,28 @@ def main():
                   "los cambios de voz en todo el audio.")
 
     # Asistencia (Presencial/Zoom) por diputado, si se mandó --asistencia.
-    # Nunca debe tumbar la sesión: un archivo faltante o mal formado
-    # simplemente la deja vacía (mismo comportamiento que sin el flag).
+    # El archivo lo va reescribiendo la API cada rato (gente que llega
+    # tarde) — aquí no se lee una sola vez: procesar_bloque() lo vuelve a
+    # revisar en cada bloque (ver actualizar_asistencia_si_cambio) y toma
+    # el cambio solo si de verdad se modificó (por mtime, barato de
+    # consultar). Nunca debe tumbar la sesión: un archivo faltante o mal
+    # formado simplemente la deja como estaba.
+    def leer_asistencia():
+        with open(args.asistencia, encoding="utf-8") as f:
+            return json.load(f)
+
+    asistencia_mtime = None
     asistencia = {}
     if args.asistencia:
         try:
-            with open(args.asistencia, encoding="utf-8") as f:
-                asistencia = json.load(f)
+            asistencia = leer_asistencia()
+            asistencia_mtime = os.path.getmtime(args.asistencia)
             n_zoom = sum(1 for m in asistencia.values() if _es_modalidad_zoom(m))
             print(f"[asistencia] {len(asistencia)} diputado(s) con "
                   f"modalidad registrada ({n_zoom} por Zoom); se les "
                   f"exigirá {args.ajuste_zoom:.2f} menos de similitud de "
-                  "voz para identificarlos.")
+                  f"voz para identificarlos. Se revisa de nuevo cada bloque "
+                  "por si cambia mientras la sesión sigue en vivo.")
         except Exception as e:
             print(f"[asistencia] No se pudo leer {args.asistencia}: {e}")
 
@@ -1114,8 +1124,34 @@ def main():
         "huerfano_micro": False,    # True si el huérfano fue un micro-corte
         "huerfano_voz": (None, 0.0),  # (candidato, similitud) del huérfano
         "huerfano_segundos": 0.0,   # duración del huérfano (para stats)
+        "asistencia": asistencia,   # {nombre: modalidad}; se refresca sola
     }
     archivo_txt = open(ruta_txt, "a", encoding="utf-8")
+
+    def actualizar_asistencia_si_cambio():
+        """Se llama una vez por bloque (cada --bloque segundos): barato de
+        revisar (un solo stat) y suficiente para notar en minutos, no
+        horas, a alguien que se acaba de conectar."""
+        nonlocal asistencia_mtime
+        if not args.asistencia:
+            return
+        try:
+            mtime = os.path.getmtime(args.asistencia)
+        except OSError:
+            return
+        if mtime == asistencia_mtime:
+            return
+        try:
+            nuevos = leer_asistencia()
+        except Exception as e:
+            print(f"[asistencia] No se pudo releer {args.asistencia}: {e}")
+            return
+        asistencia_mtime = mtime
+        if nuevos != estado["asistencia"]:
+            estado["asistencia"] = nuevos
+            n_zoom = sum(1 for m in nuevos.values() if _es_modalidad_zoom(m))
+            print(f"[asistencia] Actualizada: {len(nuevos)} diputado(s) "
+                  f"({n_zoom} por Zoom).")
 
     # ---- Identificación de voz asíncrona (--voz) ----
     # El cálculo de la huella (speechbrain) es lo más pesado del pipeline;
@@ -1176,7 +1212,7 @@ def main():
                 return
             r = identificar_huella(huella_promedio(tramo), nombres_voz,
                                    matriz_voz, args.umbral_voz,
-                                   asistencia=asistencia,
+                                   asistencia=estado["asistencia"],
                                    ajuste_zoom=args.ajuste_zoom)
             if r is None:
                 return
@@ -1471,7 +1507,7 @@ def main():
                             emb, nombres_voz, matriz_voz,
                             args.umbral_intruso,
                             margen_min=MARGEN_INTRUSO,
-                            asistencia=asistencia,
+                            asistencia=estado["asistencia"],
                             ajuste_zoom=args.ajuste_zoom)
                         if ri and ri["fuerte"]:
                             et_i = etiqueta_orador(ri["candidato"])
@@ -1522,6 +1558,7 @@ def main():
         hilo_voz.start()
 
     def procesar_bloque(ruta):
+        actualizar_asistencia_si_cambio()
         idx = indice_de_bloque(ruta)
         offset = idx * args.bloque
         prompt = (prompt_sesion + estado["contexto"])[-800:]
