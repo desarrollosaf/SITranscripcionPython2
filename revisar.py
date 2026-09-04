@@ -537,7 +537,9 @@ table.tabla-lista .accion{font-size:12.5px;padding:4px 10px}
   <div class="cuerpo-lan">
     <p class="nota-lan">Los que se crearon eligiendo "Evento del Congreso"
     arriba. Puedes detenerlos desde aquí — un trabajo detenido desaparece
-    de la lista del operador de audio (el .exe).</p>
+    de la lista del operador de audio (el .exe). Puedes reanudarlo después:
+    vuelve a aparecerle a la operadora para que retome el envío, y sigue
+    escribiendo en la misma sesión (no crea una transcripción aparte).</p>
     <button id="btnRefrescarTrabajosApi" class="accion">🔄 Actualizar</button>
     <div id="listaTrabajosApi"></div>
   </div>
@@ -1403,23 +1405,39 @@ async function cargarTrabajosApi(){
     + '<th>Sesión</th><th></th></tr></thead><tbody>'
     + trabajos.map(t => {
       const activo = t.estado === 'ejecutando' || t.estado === 'deteniendo';
+      const reanudable = (t.estado === 'detenido' || t.estado === 'error')
+                         && !!t.sesion_id;
       const detalle = t.fuente === 'srt' ? ('SRT, puerto ' + t.puerto) : 'YouTube';
+      let accion = '<span class="nota-lan">—</span>';
+      if(activo){
+        accion = '<button class="accion" data-detener="'
+               + esc(t.id) + '">Detener</button>';
+      } else if(reanudable){
+        accion = '<button class="accion" data-reanudar="'
+               + esc(t.id) + '">Reanudar</button>';
+      }
       return '<tr><td>' + esc((t.url || '').slice(0, 70)) + '</td>'
         + '<td>' + esc(detalle) + '</td>'
         + '<td>' + esc(t.estado) + '</td>'
         + '<td>' + (t.sesion_id ? '#' + t.sesion_id : '—') + '</td>'
-        + '<td>' + (activo
-           ? '<button class="accion" data-id="' + esc(t.id) + '">Detener</button>'
-           : '<span class="nota-lan">—</span>')
-        + '</td></tr>';
+        + '<td>' + accion + '</td></tr>';
     }).join('')
     + '</tbody></table></div>';
-  cont.querySelectorAll('button[data-id]').forEach(b => {
+  cont.querySelectorAll('button[data-detener]').forEach(b => {
     b.onclick = async () => {
       b.disabled = true;
-      const r = await api('/api/trabajos_api/detener', {id: b.dataset.id});
+      const r = await api('/api/trabajos_api/detener', {id: b.dataset.detener});
       if(r.error) avisar(typeof r.error === 'string' ? r.error : JSON.stringify(r.error));
       else avisar('Trabajo detenido.');
+      cargarTrabajosApi();
+    };
+  });
+  cont.querySelectorAll('button[data-reanudar]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      const r = await api('/api/trabajos_api/reanudar', {id: b.dataset.reanudar});
+      if(r.error) avisar(typeof r.error === 'string' ? r.error : JSON.stringify(r.error));
+      else avisar('Trabajo reanudado: ya debería aparecerle a la consola de audio.');
       cargarTrabajosApi();
     };
   });
@@ -3928,6 +3946,13 @@ class Manejador(BaseHTTPRequestHandler):
             return self._responder({"error": err["error"]}, codigo=err["codigo"])
         return self._responder(resultado)
 
+    def _reanudar_trabajo_api(self, job_id):
+        resultado, err = self._llamar_api(
+            "POST", f"/transcripciones/{job_id}/reanudar")
+        if err:
+            return self._responder({"error": err["error"]}, codigo=err["codigo"])
+        return self._responder(resultado)
+
     def _listar_usuarios(self):
         """Cuentas existentes (operador de audio, correctores, admins). Solo
         responde si quien llama es admin: lo decide la API (usuario_admin_actual),
@@ -4396,6 +4421,8 @@ class Manejador(BaseHTTPRequestHandler):
             return self._crear_transcripcion_evento(datos)
         if p.path == "/api/trabajos_api/detener":
             return self._detener_trabajo_api(datos.get("id"))
+        if p.path == "/api/trabajos_api/reanudar":
+            return self._reanudar_trabajo_api(datos.get("id"))
         if p.path == "/api/usuarios":
             return self._crear_usuario(datos)
 

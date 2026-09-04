@@ -9,6 +9,7 @@ import threading
 import time
 import unicodedata
 import uuid
+import wave
 from datetime import datetime, timezone
 
 from .config import settings
@@ -144,6 +145,39 @@ def _asignar_puerto_srt():
     raise ValueError(
         f"No hay puertos SRT disponibles (máximo {total} transmisiones "
         "simultáneas); espera a que termine otra o sube SRT_PUERTO_FIN.")
+
+
+def _ruta_audio_esteno(sesion_id):
+    """Mismo cálculo que _ruta_audio_esteno() en transcribir_en_vivo_c3.py
+    y _esteno_dir_audio() en revisar.py — los tres servicios comparten el
+    mismo directorio montado, así que no hace falta importar el script de
+    transcripción (pesado: carga faster_whisper) solo para esto."""
+    base = os.environ.get("ESTENO_AUDIO_DIR", "").strip()
+    if not base:
+        base = os.path.join(os.path.dirname(RUTA_SCRIPT), "audio")
+    return os.path.join(base, f"sesion_{sesion_id}.wav")
+
+
+def _duracion_audio_esteno(sesion_id):
+    """Segundos de audio ya combinados para esta sesión: el punto exacto
+    donde debe continuar la numeración de tiempos al reanudar (ver
+    --offset-inicial), para que no se encimen con lo ya transcrito."""
+    ruta = _ruta_audio_esteno(sesion_id)
+    if not os.path.isfile(ruta):
+        return 0.0
+    try:
+        with wave.open(ruta, "rb") as w:
+            return w.getnframes() / float(w.getframerate())
+    except Exception:
+        return 0.0
+
+
+def _puerto_srt_ocupado(puerto):
+    with conexion() as con, con.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM trabajos WHERE fuente='srt' AND estado='ejecutando' "
+            "AND puerto = %s", (puerto,))
+        return cur.fetchone() is not None
 
 
 def _max_sesion_id_actual():
@@ -373,6 +407,93 @@ def detener_trabajo(job_id):
         job_id, estado="detenido",
         error="Proceso perdido (el contenedor de la API se reinició "
               "mientras corría); marcado como detenido manualmente.")
+
+
+def reanudar_trabajo(job_id):
+    """Vuelve a lanzar el proceso de un trabajo 'detenido' (o que terminó
+    en 'error'), continuando LA MISMA sesión en vez de crear una nueva:
+    --sesion-id le dice al script que no inserte otra fila en `sesiones`,
+    y --offset-inicial (duración del audio ya combinado) corre los tiempos
+    para que sigan donde se quedó, sin encimarse con lo ya transcrito. Así
+    el trabajo vuelve a 'ejecutando' y reaparece en
+    listar_trabajos_srt_activos() para que la consola de audio retome el
+    envío."""
+    fila = obtener_trabajo(job_id)
+    if not fila:
+        raise ValueError("El trabajo no existe")
+    if fila["estado"] not in ("detenido", "error"):
+        raise ValueError(
+            "Solo se puede reanudar un trabajo detenido o que terminó en error")
+    if not fila["sesion_id"]:
+        raise ValueError(
+            "Este trabajo nunca llegó a crear una sesión; créalo de nuevo "
+            "en vez de reanudarlo")
+    if fila["evento_id"]:
+        otro = trabajo_activo_por_evento(fila["evento_id"])
+        if otro and otro["id"] != job_id:
+            raise ValueError(
+                f"Ya hay otro trabajo activo para este evento (id {otro['id']})")
+
+    carpeta = os.path.join(settings.jobs_dir, job_id)
+    os.makedirs(carpeta, exist_ok=True)
+    encontrados = json.loads(fila["participantes_encontrados"]) \
+        if isinstance(fila["participantes_encontrados"], str) \
+        else fila["participantes_encontrados"]
+
+    ruta_perfiles = os.path.join(carpeta, "perfiles.json")
+    if not os.path.isfile(ruta_perfiles):
+        ruta_perfiles = _escribir_perfiles_filtrados(job_id, encontrados)
+
+    ruta_asistencia = os.path.join(carpeta, "asistencia.json")
+    if not os.path.isfile(ruta_asistencia):
+        ruta_asistencia = None
+
+    log_path = os.path.join(carpeta, "salida.log")
+    log = open(log_path, "a", encoding="utf-8")
+    log.write(f"\n--- reanudado {datetime.now(timezone.utc).isoformat()} ---\n")
+    log.flush()
+
+    puerto, passphrase = fila["puerto"], fila["passphrase"]
+    if fila["fuente"] == "srt":
+        if puerto is None or _puerto_srt_ocupado(puerto):
+            puerto = _asignar_puerto_srt()
+        if not passphrase:
+            passphrase = secrets.token_hex(16)
+
+    offset_inicial = _duracion_audio_esteno(fila["sesion_id"])
+
+    comando = [
+        sys.executable, RUTA_SCRIPT, fila["url"],
+        "--modelo", fila["modelo"],
+        "--db", settings.db_path,
+        "--voz",
+        "--perfiles", ruta_perfiles,
+        "--sesion-id", str(fila["sesion_id"]),
+        "--offset-inicial", str(offset_inicial),
+        "--conservar-audio",
+    ]
+    if ruta_asistencia:
+        comando += ["--asistencia", ruta_asistencia]
+    if fila["fuente"] == "srt":
+        comando += ["--puerto-srt", str(puerto), "--srt-passphrase", passphrase]
+
+    proc = subprocess.Popen(comando, stdout=log, stderr=subprocess.STDOUT,
+                             cwd=os.path.dirname(RUTA_SCRIPT) or ".")
+
+    _actualizar_trabajo(job_id, estado="ejecutando", pid=proc.pid,
+                        puerto=puerto, passphrase=passphrase, error=None)
+
+    with _lock:
+        _procesos[job_id] = {"proc": proc, "log": log}
+
+    threading.Thread(target=_monitorear, args=(job_id, proc, log_path),
+                      daemon=True).start()
+    if fila["evento_id"]:
+        threading.Thread(target=_actualizar_asistencia_periodica,
+                         args=(job_id, fila["evento_id"], encontrados),
+                         daemon=True).start()
+
+    return obtener_trabajo(job_id)
 
 
 def obtener_participaciones(sesion_id):

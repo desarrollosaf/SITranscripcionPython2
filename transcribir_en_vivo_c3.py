@@ -979,6 +979,16 @@ def main():
     ap.add_argument("--ajuste-zoom", type=float, default=0.05,
                     help="cuánto se relaja --umbral-voz para alguien "
                          "marcado como Zoom en --asistencia (default: 0.05)")
+    ap.add_argument("--sesion-id", type=int, default=None,
+                    help="en vez de crear una sesión nueva, reanuda esta "
+                         "(ya debe existir en --db); usar junto con "
+                         "--offset-inicial para retomar un trabajo detenido "
+                         "sin partir el transcript en dos sesiones")
+    ap.add_argument("--offset-inicial", type=float, default=0.0,
+                    help="segundos a sumar a todos los tiempos calculados, "
+                         "para que continúen donde se quedó la sesión que "
+                         "se está reanudando (--sesion-id) en vez de "
+                         "reiniciar en 0:00 y encimarse con lo ya transcrito")
     args = ap.parse_args()
 
     # Consola en UTF-8 (evita errores de acentos en Windows)
@@ -1034,11 +1044,19 @@ def main():
                           compute_type="auto")
 
     con = abrir_db(args.db)
-    cur = con.execute(
-        "INSERT INTO sesiones (url, titulo, inicio) VALUES (?, ?, ?)",
-        (args.url, titulo, datetime.now().isoformat(timespec="seconds")))
-    sesion_id = cur.lastrowid
-    con.commit()
+    if args.sesion_id:
+        fila_sesion = con.execute(
+            "SELECT id FROM sesiones WHERE id = ?", (args.sesion_id,)).fetchone()
+        if not fila_sesion:
+            raise SystemExit(
+                f"--sesion-id {args.sesion_id}: no existe esa sesión en {args.db}")
+        sesion_id = args.sesion_id
+    else:
+        cur = con.execute(
+            "INSERT INTO sesiones (url, titulo, inicio) VALUES (?, ?, ?)",
+            (args.url, titulo, datetime.now().isoformat(timespec="seconds")))
+        sesion_id = cur.lastrowid
+        con.commit()
 
     # ---- Reconocimiento de voz (opcional) ----
     nombres_voz = matriz_voz = encoder_voz = None
@@ -1089,7 +1107,11 @@ def main():
         except Exception as e:
             print(f"[asistencia] No se pudo leer {args.asistencia}: {e}")
 
-    print(f"\nSesión #{sesion_id}: {titulo}")
+    accion = "Reanudando" if args.sesion_id else "Sesión"
+    print(f"\n{accion} #{sesion_id}: {titulo}")
+    if args.offset_inicial:
+        print(f"Tiempos continúan desde {hms(args.offset_inicial)} "
+              "(--offset-inicial)")
     print(f"Base de datos : {os.path.abspath(args.db)}")
     print(f"Texto en vivo : {os.path.abspath(ruta_txt)}")
 
@@ -1560,7 +1582,7 @@ def main():
     def procesar_bloque(ruta):
         actualizar_asistencia_si_cambio()
         idx = indice_de_bloque(ruta)
-        offset = idx * args.bloque
+        offset = idx * args.bloque + args.offset_inicial
         prompt = (prompt_sesion + estado["contexto"])[-800:]
         try:
             segmentos, _ = modelo.transcribe(

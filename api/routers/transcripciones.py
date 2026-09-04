@@ -123,6 +123,16 @@ def detener_transcripcion(job_id: str, usuario=Depends(usuario_actual)):
     return _a_trabajo_out(jobs.obtener_trabajo(job_id))
 
 
+@router.post("/{job_id}/reanudar", response_model=TrabajoOut)
+def reanudar_transcripcion(job_id: str, usuario=Depends(usuario_actual)):
+    _trabajo_o_404(job_id, usuario)
+    try:
+        jobs.reanudar_trabajo(job_id)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e))
+    return _a_trabajo_out(jobs.obtener_trabajo(job_id))
+
+
 @router.get("/{job_id}/participaciones", response_model=list[ParticipacionOut])
 def ver_participaciones(job_id: str, usuario=Depends(usuario_actual)):
     fila = _trabajo_o_404(job_id, usuario)
