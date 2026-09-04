@@ -1405,8 +1405,8 @@ async function cargarTrabajosApi(){
     + '<th>Sesión</th><th></th></tr></thead><tbody>'
     + trabajos.map(t => {
       const activo = t.estado === 'ejecutando' || t.estado === 'deteniendo';
-      const reanudable = (t.estado === 'detenido' || t.estado === 'error')
-                         && !!t.sesion_id;
+      const reanudable = (t.estado === 'detenido' || t.estado === 'error'
+                          || t.estado === 'finalizado') && !!t.sesion_id;
       const detalle = t.fuente === 'srt' ? ('SRT, puerto ' + t.puerto) : 'YouTube';
       let accion = '<span class="nota-lan">—</span>';
       if(activo){

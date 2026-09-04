@@ -173,7 +173,7 @@ class FilaEvento:
     botón de iniciar/detener y estado. Puede haber varias transmitiendo
     a la vez, cada una con su propio proceso ffmpeg."""
 
-    def __init__(self, parent, app, evento, dispositivos):
+    def __init__(self, parent, app, evento, dispositivos, nuevo=False):
         self.app = app
         self.evento = evento
         self.proc = None
@@ -182,6 +182,20 @@ class FilaEvento:
 
         self.marco = ttk.Frame(parent, padding=6, relief="groove", borderwidth=1)
         self.marco.pack(fill="x", padx=4, pady=3)
+
+        if nuevo:
+            # Aviso temporal para que no se pase por alto un trabajo que
+            # acaba de reaparecer (p. ej. lo acaban de reanudar): además
+            # de la campana y de traer la ventana al frente (ver
+            # VentanaPrincipal._aplicar_eventos), esta etiqueta marca CUÁL
+            # fila es la nueva. Se quita sola a los 20 s.
+            self.aviso_nuevo = ttk.Label(
+                self.marco, text="● Nuevo — manda audio",
+                foreground="#c0392b", font=("", 9, "bold"))
+            self.aviso_nuevo.pack(anchor="w")
+            self.marco.after(20_000, self._quitar_aviso_nuevo)
+        else:
+            self.aviso_nuevo = None
 
         nombre = evento.get("url") or f"Trabajo {evento['id'][:8]}"
         ttk.Label(self.marco, text=nombre, font=("", 10, "bold")).pack(anchor="w")
@@ -204,6 +218,11 @@ class FilaEvento:
         self.boton_log = ttk.Button(fila, text="Ver registro",
                                     command=self._ver_registro, state="disabled")
         self.boton_log.pack(side="left", padx=8)
+
+    def _quitar_aviso_nuevo(self):
+        if self.aviso_nuevo is not None:
+            self.aviso_nuevo.destroy()
+            self.aviso_nuevo = None
 
     def actualizar_dispositivos(self, dispositivos):
         """dispositivos: lista de (nombre, id_alterno_o_None)."""
@@ -307,6 +326,7 @@ class VentanaPrincipal(ttk.Frame):
         self.cliente = cliente
         self.filas = {}
         self.dispositivos = []
+        self._ya_cargo = False
         self.pack(fill="both", expand=True)
 
         barra = ttk.Frame(self)
@@ -368,13 +388,25 @@ class VentanaPrincipal(ttk.Frame):
         threading.Thread(target=trabajo, daemon=True).start()
 
     def _aplicar_eventos(self, eventos):
+        # self._ya_cargo distingue la primera carga (al abrir la app, donde
+        # avisar de cada fila sería ruido) de las siguientes (donde una fila
+        # nueva sí amerita avisar: es una comisión recién creada o un
+        # trabajo que acaban de reanudar y que había desaparecido de aquí
+        # al detenerlo).
+        avisar_nuevos = self._ya_cargo
+        llegaron_nuevos = False
         vistos = set()
         for evento in eventos:
             vistos.add(evento["id"])
             if evento["id"] in self.filas:
                 continue
             self.filas[evento["id"]] = FilaEvento(
-                self.lista, self, evento, self.dispositivos)
+                self.lista, self, evento, self.dispositivos,
+                nuevo=avisar_nuevos)
+            llegaron_nuevos = True
+        self._ya_cargo = True
+        if avisar_nuevos and llegaron_nuevos:
+            self._avisar_nuevos()
         # Quita de la lista los que ya no están esperando audio y no
         # están transmitiendo (para no interrumpir una transmisión activa
         # solo porque tardó en refrescarse el estado en el servidor).
@@ -388,6 +420,19 @@ class VentanaPrincipal(ttk.Frame):
             self.aviso_var.set("No hay comisiones esperando audio ahorita.")
         else:
             self.aviso_var.set(f"{len(eventos)} comisión(es) esperando audio.")
+
+    def _avisar_nuevos(self):
+        """Suena y trae la ventana al frente para que la operadora note que
+        llegó (o volvió) una comisión esperando audio, aunque tenga la
+        ventana minimizada o detrás de otras."""
+        try:
+            self.root.bell()
+        except Exception:
+            pass
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.after(300, lambda: self.root.attributes("-topmost", False))
 
     def _ciclo_estado(self):
         for fila in self.filas.values():

@@ -410,8 +410,9 @@ def detener_trabajo(job_id):
 
 
 def reanudar_trabajo(job_id):
-    """Vuelve a lanzar el proceso de un trabajo 'detenido' (o que terminó
-    en 'error'), continuando LA MISMA sesión en vez de crear una nueva:
+    """Vuelve a lanzar el proceso de un trabajo 'detenido', 'finalizado' o
+    que terminó en 'error', continuando LA MISMA sesión en vez de crear una
+    nueva:
     --sesion-id le dice al script que no inserte otra fila en `sesiones`,
     y --offset-inicial (duración del audio ya combinado) corre los tiempos
     para que sigan donde se quedó, sin encimarse con lo ya transcrito. Así
@@ -421,9 +422,10 @@ def reanudar_trabajo(job_id):
     fila = obtener_trabajo(job_id)
     if not fila:
         raise ValueError("El trabajo no existe")
-    if fila["estado"] not in ("detenido", "error"):
+    if fila["estado"] not in ("detenido", "error", "finalizado"):
         raise ValueError(
-            "Solo se puede reanudar un trabajo detenido o que terminó en error")
+            "Solo se puede reanudar un trabajo detenido, finalizado o que "
+            "terminó en error")
     if not fila["sesion_id"]:
         raise ValueError(
             "Este trabajo nunca llegó a crear una sesión; créalo de nuevo "
