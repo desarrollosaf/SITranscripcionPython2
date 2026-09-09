@@ -1309,10 +1309,12 @@ async function cargarLanzador(){
       return avisar(eventos.error);
     }
     sel.innerHTML = eventos.map(e => {
-      const fecha = (e.fecha || '').slice(0, 10);
+      const fechaHora = (e.fecha || '').replace('T', ' ').slice(0, 16);
       const marca = e.liga ? ' 🔗' : '';
+      const comisiones = (e.comisiones && e.comisiones.length)
+        ? '[' + e.comisiones.join(', ') + ']' : '(sin comisión)';
       return '<option value="' + esc(e.id) + '">'
-        + esc(fecha + ' — ' + (e.descripcion || '').slice(0, 70) + marca)
+        + esc(fechaHora + ' — ' + comisiones + marca)
         + '</option>';
     }).join('') || '<option value="">(sin eventos)</option>';
   };
@@ -4098,12 +4100,29 @@ class Manejador(BaseHTTPRequestHandler):
             try:
                 with urllib.request.urlopen(f"{base}/{tipo}", timeout=15) as r:
                     datos = json.loads(r.read().decode("utf-8"))
-                eventos = [{"id": e.get("id"),
-                           "descripcion": (e.get("descripcion") or "").strip(),
-                           "fecha": e.get("fecha"),
-                           "tipoevento": e.get("tipoevento"),
-                           "liga": e.get("liga")}
-                          for e in datos.get("data", [])]
+
+                def _importancia(i):
+                    try:
+                        return int(i.get("importancia"))
+                    except (TypeError, ValueError):
+                        return 999
+
+                eventos = []
+                for e in datos.get("data", []):
+                    integrantes = sorted(
+                        e.get("integrantes") or [], key=_importancia)
+                    comisiones = []
+                    for i in integrantes:
+                        nombre = i.get("comision_nombre")
+                        if nombre and nombre not in comisiones:
+                            comisiones.append(nombre)
+                    eventos.append({"id": e.get("id"),
+                                    "descripcion":
+                                        (e.get("descripcion") or "").strip(),
+                                    "fecha": e.get("fecha"),
+                                    "tipoevento": e.get("tipoevento"),
+                                    "liga": e.get("liga"),
+                                    "comisiones": comisiones})
                 self._responder(eventos)
             except Exception as e:
                 self._responder(
