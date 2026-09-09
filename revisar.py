@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from docx import Document
@@ -1309,7 +1309,7 @@ async function cargarLanzador(){
       return avisar(eventos.error);
     }
     sel.innerHTML = eventos.map(e => {
-      const fechaHora = (e.fecha || '').replace('T', ' ').slice(0, 16);
+      const fechaHora = e.fecha || '';
       const marca = e.liga ? ' 🔗' : '';
       const comisiones = (e.comisiones && e.comisiones.length)
         ? '[' + e.comisiones.join(', ') + ']' : '(sin comisión)';
@@ -2614,6 +2614,27 @@ def _fecha_legible(valor):
         except ValueError:
             continue
     return texto
+
+
+def _fecha_hora_mx(valor):
+    """El sistema de registro parlamentario manda 'fecha' en UTC (sufijo Z).
+    La convierte a hora local de Ciudad de México (UTC-6 todo el año desde
+    que se abolió el horario de verano en 2022) y la formatea
+    'YYYY-MM-DD HH:MM'. Si no puede interpretarla, la regresa tal cual."""
+    if not valor:
+        return ""
+    texto = str(valor).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(texto, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        return texto.replace("T", " ")[:16]
+    d -= timedelta(hours=6)
+    return d.strftime("%Y-%m-%d %H:%M")
 
 
 def _campo(fila, nombre, defecto=None):
@@ -4119,7 +4140,7 @@ class Manejador(BaseHTTPRequestHandler):
                     eventos.append({"id": e.get("id"),
                                     "descripcion":
                                         (e.get("descripcion") or "").strip(),
-                                    "fecha": e.get("fecha"),
+                                    "fecha": _fecha_hora_mx(e.get("fecha")),
                                     "tipoevento": e.get("tipoevento"),
                                     "liga": e.get("liga"),
                                     "comisiones": comisiones})

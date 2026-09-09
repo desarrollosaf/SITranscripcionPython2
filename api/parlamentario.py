@@ -4,6 +4,7 @@ transcripción sin escribir la lista de participantes a mano."""
 import json
 import os
 import urllib.request
+from datetime import datetime, timedelta
 
 BASE_URL = os.environ.get(
     "PARLAMENTARIO_API_URL",
@@ -59,6 +60,27 @@ def obtener_asistencia(evento_id):
         return {}
 
 
+def _fecha_hora_mx(valor):
+    """El sistema de registro parlamentario manda 'fecha' en UTC (sufijo Z).
+    La convierte a hora local de Ciudad de México (UTC-6 todo el año desde
+    que se abolió el horario de verano en 2022) y la formatea
+    'YYYY-MM-DD HH:MM'. Si no puede interpretarla, la regresa tal cual."""
+    if not valor:
+        return ""
+    texto = str(valor).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(texto, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        return texto.replace("T", " ")[:16]
+    d -= timedelta(hours=6)
+    return d.strftime("%Y-%m-%d %H:%M")
+
+
 def etiqueta_evento(evento):
     """Arma una etiqueta legible 'fecha hora — [comisiones]' para usarla
     como URL/título del trabajo cuando el evento no trae liga de YouTube
@@ -69,7 +91,7 @@ def etiqueta_evento(evento):
         except (TypeError, ValueError):
             return 999
 
-    fecha = (evento.get("fecha") or "").replace("T", " ")[:16]
+    fecha = _fecha_hora_mx(evento.get("fecha"))
     comisiones = []
     for item in sorted(evento.get("integrantes") or [], key=_importancia):
         nombre = item.get("comision_nombre")
