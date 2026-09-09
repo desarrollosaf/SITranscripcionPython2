@@ -82,7 +82,7 @@ def crear_desde_evento(datos: TrabajoDesdeEvento, usuario=Depends(usuario_actual
     asistencia_cruda = parlamentario.obtener_asistencia(datos.evento_id)
 
     trabajo = TrabajoCrear(
-        url=evento.get("liga") or (evento.get("descripcion") or "")[:200].strip(),
+        url=evento.get("liga") or parlamentario.etiqueta_evento(evento)[:200],
         participantes=participantes,
         modelo=datos.modelo, bloque=datos.bloque,
         fuente="youtube" if evento.get("liga") else "srt")

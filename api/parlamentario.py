@@ -59,6 +59,26 @@ def obtener_asistencia(evento_id):
         return {}
 
 
+def etiqueta_evento(evento):
+    """Arma una etiqueta legible 'fecha hora — [comisiones]' para usarla
+    como URL/título del trabajo cuando el evento no trae liga de YouTube
+    (mismo formato que el combo de eventos en revisar.py)."""
+    def _importancia(item):
+        try:
+            return int(item.get("importancia"))
+        except (TypeError, ValueError):
+            return 999
+
+    fecha = (evento.get("fecha") or "").replace("T", " ")[:16]
+    comisiones = []
+    for item in sorted(evento.get("integrantes") or [], key=_importancia):
+        nombre = item.get("comision_nombre")
+        if nombre and nombre not in comisiones:
+            comisiones.append(nombre)
+    bloque = "[" + ", ".join(comisiones) + "]" if comisiones else "(sin comisión)"
+    return f"{fecha} — {bloque}" if fecha else bloque
+
+
 def participantes_de_evento(evento):
     """Aplana 'integrantes': en Sesión/Diputación permanente ya es una
     lista plana de {"diputado": nombre}; en Comisión viene anidada por
