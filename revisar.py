@@ -39,6 +39,8 @@ from docx import Document
 from docx.shared import Pt
 from io import BytesIO
 
+import db_sesiones
+
 # ---------------------------------------------------------------------------
 # Autenticación opcional (--requiere-login): reutiliza los mismos usuarios
 # de MySQL y tokens JWT que la API (api/security.py, api/db_mysql.py). Solo
@@ -2800,7 +2802,7 @@ def _esteno_ruta_audio(con, sid):
                         (sid,)).fetchone()
         if r and r["ruta"] and os.path.isfile(r["ruta"]):
             return r["ruta"]
-    except sqlite3.Error:
+    except db_sesiones.ERRORES_DB:
         pass
     carpeta = _esteno_dir_audio()
     for ext in ESTENO_AUDIO_EXTS:
@@ -3171,7 +3173,9 @@ def conectar_db(ruta_db):
     propias de la revisión: resúmenes, estructura y módulo estenográfico."""
     # timeout: espera hasta 30 s si otro proceso (el transcriptor en
     # vivo) está escribiendo, en vez de fallar con "database is locked".
-    con = sqlite3.connect(ruta_db, timeout=30)
+    # Con SESIONES_DB=mysql es MySQL (ver db_sesiones.py) y los PRAGMA y
+    # CREATE TABLE de abajo no hacen nada: el esquema ya existe allá.
+    con = db_sesiones.conectar(ruta_db, timeout=30)
     con.row_factory = sqlite3.Row
     # WAL permite leer mientras otro escribe; busy_timeout refuerza la
     # espera a nivel del motor SQLite.
@@ -3270,7 +3274,7 @@ def generar_word(con, sid, corrector="", marcar_autores=False):
         resumenes = ([] if corrector else con.execute(
             "SELECT orador, resumen FROM resumenes "
             "WHERE sesion_id=? ORDER BY ancla_id", (sid,)).fetchall())
-    except sqlite3.Error:
+    except db_sesiones.ERRORES_DB:
         resumenes = []
     # Estructura (encabezados del orden del día), si existe
     estructura = {"secciones": []}
@@ -3280,7 +3284,7 @@ def generar_word(con, sid, corrector="", marcar_autores=False):
             (sid,)).fetchone()
         if fe and fe["datos"]:
             estructura = json.loads(fe["datos"])
-    except (sqlite3.Error, ValueError, TypeError):
+    except db_sesiones.ERRORES_DB + (ValueError, TypeError):
         pass
     # Mapa ancla_id -> título de sección para insertar encabezados.
     titulos_seccion = {s["ancla_id"]: s["titulo"]
@@ -4840,7 +4844,7 @@ def main():
     except Exception:
         pass
 
-    if not os.path.isfile(args.db):
+    if not db_sesiones.usa_mysql() and not os.path.isfile(args.db):
         print(f"No encuentro la base de datos: {os.path.abspath(args.db)}")
         print("Corre primero transcribir_en_vivo.py, o indica la ruta "
               "con --db.")

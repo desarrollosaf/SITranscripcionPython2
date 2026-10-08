@@ -27,3 +27,7 @@ transcripcion_en_curso.log
 
 # Sistema
 .DS_Store
+
+# Respaldos de producción (datos reales, nunca a git)
+respaldos/
+respaldo_*

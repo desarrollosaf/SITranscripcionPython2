@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 
+import db_sesiones
+
 from . import jobs
 from .db_mysql import inicializar_esquema
 from .routers import (auth, esteno, lanzador, participantes, sesiones,
@@ -14,6 +16,9 @@ app = FastAPI(title="API de transcripción en vivo",
 @app.on_event("startup")
 def _startup():
     inicializar_esquema()
+    if db_sesiones.usa_mysql():
+        # Tablas de las sesiones transcritas (antes en sesiones.db).
+        db_sesiones.crear_esquema_mysql()
     # _procesos vive en memoria: al arrancar siempre está vacío, así que
     # cualquier trabajo "ejecutando" en la base a esta altura es un
     # fantasma de un reinicio anterior. Se cierran solos.

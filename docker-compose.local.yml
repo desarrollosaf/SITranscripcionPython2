@@ -29,6 +29,13 @@ services:
       mysql:
         condition: service_healthy
 
+  transcriptor:
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASS=${DB_PASS:-root}
+
   revisor:
     environment:
       - DB_HOST=mysql

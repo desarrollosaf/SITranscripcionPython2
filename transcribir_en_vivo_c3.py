@@ -39,6 +39,8 @@ from datetime import datetime
 from queue import Queue
 from types import SimpleNamespace
 
+import db_sesiones
+
 try:
     import numpy as np
 except ImportError:
@@ -887,7 +889,9 @@ def abrir_db(ruta):
     # hilo aparte (ver trabajador_voz) para no frenar la transcripción. El
     # acceso sigue siendo seguro porque SIEMPRE se hace con lock_estado
     # tomado — nunca hay dos hilos usando `con` al mismo tiempo.
-    con = sqlite3.connect(ruta, check_same_thread=False)
+    # Con SESIONES_DB=mysql escribe en MySQL (ver db_sesiones.py); ahí los
+    # CREATE de abajo no hacen nada porque el esquema ya existe.
+    con = db_sesiones.conectar(ruta, check_same_thread=False)
     con.execute("""
         CREATE TABLE IF NOT EXISTS sesiones (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,

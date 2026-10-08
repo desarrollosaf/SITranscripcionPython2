@@ -222,6 +222,31 @@ Para desarrollar el frontend con recarga en vivo: `cd web && npm install && npm 
 `revisar.py` (servicio `revisor`, puerto 8756) sigue funcionando en paralelo
 sobre la misma base mientras se termina la transición.
 
+### Sesiones en MySQL en vez de sesiones.db
+
+Con `SESIONES_DB=mysql` en el `.env`, el transcriptor, `voz.py`, `corregir.py`,
+`revisar.py` y la API guardan las sesiones en la misma base MySQL que usuarios
+y trabajos (`DB_NAME`). `db_sesiones.py` hace la traducción, así que el código
+de cada script no cambió; con `SESIONES_DB=sqlite` (el default) todo sigue
+usando `sesiones.db`. Los audios no van a la base: quedan en carpetas.
+
+Migración (copia los mismos id, salta sesiones sin texto, todo o nada):
+
+```bash
+# 1. Respaldo consistente del SQLite
+docker compose exec api python -c "import sqlite3; s=sqlite3.connect('sesiones.db'); d=sqlite3.connect('respaldo_sesiones.db'); s.backup(d); d.close()"
+# 2. Ver qué se migraría
+docker compose exec api python migrar_sesiones_a_mysql.py --sqlite respaldo_sesiones.db --simular
+# 3. Migrar (compara conteos al final; si no cuadran, deshace todo)
+docker compose exec api python migrar_sesiones_a_mysql.py --sqlite respaldo_sesiones.db
+# 4. SESIONES_DB=mysql en el .env y reiniciar
+docker compose up -d
+```
+
+Hazlo sin transcripciones en curso: lo que se escriba en `sesiones.db` después
+del respaldo no se migra. Para regresar, vuelve a `SESIONES_DB=sqlite`
+(`sesiones.db` no se borra ni se modifica).
+
 ## Correr con Docker
 
 Alternativa a instalar Python/ffmpeg/librerías a mano: todo queda dentro de un

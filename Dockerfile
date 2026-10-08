@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir -r requirements-api.txt \
     && pip install --no-cache-dir -r requirements-revisar.txt
 
-COPY transcribir_en_vivo_c3.py voz.py revisar.py crear_admin.py ./
+COPY transcribir_en_vivo_c3.py voz.py corregir.py revisar.py db_sesiones.py crear_admin.py ./
 COPY api ./api
 
 # Carpetas de datos que normalmente se montan como volúmenes (ver docker-compose.yml)

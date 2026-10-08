@@ -39,6 +39,8 @@ import wave
 
 import numpy as np
 
+import db_sesiones
+
 YTDLP = [sys.executable, "-m", "yt_dlp"]
 ORADOR_MESA = "Presidencia / Mesa Directiva"
 CARPETA_CACHE = os.path.join("sesiones_en_vivo", "voz_cache")
@@ -230,10 +232,10 @@ def descargar_rango(url, desde, hasta, destino):
 # ---------------------------------------------------------------------------
 
 def abrir_db(ruta):
-    if not os.path.isfile(ruta):
+    if not db_sesiones.usa_mysql() and not os.path.isfile(ruta):
         print(f"No encuentro la base de datos: {ruta}")
         sys.exit(1)
-    con = sqlite3.connect(ruta)
+    con = db_sesiones.conectar(ruta)
     con.row_factory = sqlite3.Row
     return con
 

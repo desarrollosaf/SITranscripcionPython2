@@ -11,8 +11,18 @@ services:
       # en cada `docker compose run`.
       - whisper-cache:/root/.cache/huggingface
       - torch-cache:/root/.cache/torch
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Dónde se guardan las sesiones: sqlite (sesiones.db) o mysql (ver
+      # db_sesiones.py). Con mysql usa las mismas DB_* que la API.
+      - SESIONES_DB=${SESIONES_DB:-sqlite}
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-}
+      - DB_NAME=${DB_NAME:-transcripcion_api}
 
   # API (FastAPI): recibe url + participantes del otro sistema, lanza
   # transcribir_en_vivo_c3.py acotado a esos participantes y expone el
@@ -51,6 +61,9 @@ services:
       - DB_PASS=${DB_PASS:-}
       - DB_NAME=${DB_NAME:-transcripcion_api}
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
+      # sqlite = sesiones.db; mysql = tablas de sesiones en DB_NAME (ver
+      # db_sesiones.py y migrar_sesiones_a_mysql.py).
+      - SESIONES_DB=${SESIONES_DB:-sqlite}
       - SRT_PUERTO_BASE=${SRT_PUERTO_BASE:-9000}
       - SRT_PUERTO_FIN=${SRT_PUERTO_FIN:-9009}
       # Corrección de estilo, orden del día y resúmenes con IA (pantalla
@@ -107,6 +120,7 @@ services:
       - DB_PASS=${DB_PASS:-}
       - DB_NAME=${DB_NAME:-transcripcion_api}
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
+      - SESIONES_DB=${SESIONES_DB:-sqlite}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - PARLAMENTARIO_API_URL=${PARLAMENTARIO_API_URL:-https://parlamentario.congresoedomex.gob.mx/backend/api/eventos/ultimoseventos}
 

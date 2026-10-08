@@ -32,6 +32,8 @@ import os
 import sqlite3
 import sys
 
+import db_sesiones
+
 # Etiquetas "zona gris": las únicas que el corrector se permite tocar. Un
 # orador ya nombrado (o respaldado por anuncio) es intocable.
 ORADOR_MESA = "Presidencia / Mesa Directiva"
@@ -194,11 +196,11 @@ def main():
     except Exception:
         pass
 
-    if not os.path.isfile(args.db):
+    if not db_sesiones.usa_mysql() and not os.path.isfile(args.db):
         print(f"No encuentro la base de datos: {os.path.abspath(args.db)}")
         sys.exit(1)
 
-    con = sqlite3.connect(args.db)
+    con = db_sesiones.conectar(args.db)
     con.row_factory = sqlite3.Row
     if args.aplicar:
         asegurar_columnas(con)

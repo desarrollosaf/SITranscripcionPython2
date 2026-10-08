@@ -12,6 +12,8 @@ import uuid
 import wave
 from datetime import datetime, timezone
 
+import db_sesiones
+
 from .config import settings
 from .db_mysql import conexion
 
@@ -181,9 +183,9 @@ def _puerto_srt_ocupado(puerto):
 
 
 def _max_sesion_id_actual():
-    if not os.path.isfile(settings.db_path):
+    if not db_sesiones.usa_mysql() and not os.path.isfile(settings.db_path):
         return 0
-    con = sqlite3.connect(settings.db_path, timeout=10)
+    con = db_sesiones.conectar(settings.db_path, timeout=10)
     try:
         fila = con.execute("SELECT COALESCE(MAX(id), 0) FROM sesiones").fetchone()
         return fila[0]
@@ -208,12 +210,14 @@ def _detectar_sesion_id(job_id, url, id_previo, log):
         if entrada is None:
             return
         try:
-            con = sqlite3.connect(settings.db_path, timeout=5)
-            fila = con.execute(
-                "SELECT id FROM sesiones WHERE url = ? AND id > ? "
-                "ORDER BY id DESC LIMIT 1", (url, id_previo)).fetchone()
-            con.close()
-        except sqlite3.OperationalError:
+            con = db_sesiones.conectar(settings.db_path, timeout=5)
+            try:
+                fila = con.execute(
+                    "SELECT id FROM sesiones WHERE url = ? AND id > ? "
+                    "ORDER BY id DESC LIMIT 1", (url, id_previo)).fetchone()
+            finally:
+                con.close()
+        except db_sesiones.ERRORES_DB:
             continue
         if fila:
             _actualizar_trabajo(job_id, sesion_id=fila[0])
@@ -499,7 +503,7 @@ def reanudar_trabajo(job_id):
 
 
 def obtener_participaciones(sesion_id):
-    con = sqlite3.connect(settings.db_path, timeout=10)
+    con = db_sesiones.conectar(settings.db_path, timeout=10)
     con.row_factory = sqlite3.Row
     try:
         filas = con.execute(
