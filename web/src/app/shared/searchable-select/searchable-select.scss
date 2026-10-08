@@ -1,0 +1,111 @@
+:host {
+  display: block;
+}
+
+.searchable-select {
+  position: relative;
+  width: 100%;
+
+  input {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    height: 44px;
+    padding: 0 2.25rem 0 0.85rem;
+    border: 1.5px solid var(--brand-border);
+    border-radius: 12px;
+    background: #f4f6f5;
+    font-size: 0.9rem;
+    color: var(--brand-ink);
+    outline: none;
+    font-family: inherit;
+    box-sizing: border-box;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus {
+      border-color: var(--brand-primary);
+      box-shadow: 0 0 0 3px var(--brand-primary-soft);
+    }
+
+    &:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+  }
+
+  &.is-invalid input {
+    border-color: var(--brand-danger);
+    background: var(--brand-danger-bg);
+  }
+
+  &__chevron {
+    position: absolute;
+    top: 50%;
+    right: 0.85rem;
+    width: 16px;
+    height: 16px;
+    transform: translateY(-50%);
+    color: var(--brand-muted);
+    pointer-events: none;
+    transition: transform 0.15s;
+
+    &.is-open {
+      transform: translateY(-50%) rotate(180deg);
+    }
+  }
+
+  &.is-disabled &__chevron {
+    opacity: 0.5;
+  }
+
+  &__dropdown {
+    position: absolute;
+    z-index: 6;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    right: 0;
+    max-height: 260px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0.4rem;
+    list-style: none;
+    background: #fff;
+    border: 1px solid var(--brand-border);
+    border-radius: 12px;
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.14);
+
+    li {
+      display: block;
+    }
+
+    button {
+      display: block;
+      width: 100%;
+      padding: 0.55rem 0.75rem;
+      border: none;
+      border-radius: 8px;
+      background: none;
+      text-align: left;
+      font-size: 0.86rem;
+      color: var(--brand-ink);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+
+      &:hover {
+        background: var(--brand-primary-soft);
+      }
+
+      &.is-selected {
+        background: var(--brand-primary-soft);
+        color: var(--brand-primary);
+        font-weight: 700;
+      }
+    }
+  }
+
+  &__hint {
+    padding: 0.6rem 0.75rem;
+    font-size: 0.82rem;
+    color: var(--brand-muted);
+  }
+}

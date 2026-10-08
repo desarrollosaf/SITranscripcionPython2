@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UsuarioCrear(BaseModel):
@@ -13,6 +13,22 @@ class UsuarioOut(BaseModel):
     id: int
     email: str
     es_admin: bool
+
+
+class UsuarioGenerar(BaseModel):
+    # str y no EmailStr: email-validator rechaza dominios internos como
+    # "operador1@congreso.local", que es justo lo que se usa para estas cuentas.
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    es_admin: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def _minusculas(cls, v):
+        return v.strip().lower()
+
+
+class UsuarioConPassword(UsuarioOut):
+    password: str
 
 
 class Token(BaseModel):

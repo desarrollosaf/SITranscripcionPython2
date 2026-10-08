@@ -1,0 +1,113 @@
+:host {
+  display: block;
+}
+
+.toast-stack {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.85rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--brand-border);
+  border-left: 4px solid var(--brand-muted);
+  border-radius: 12px;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.16);
+  pointer-events: auto;
+  animation: toast-in 0.2s ease-out;
+
+  &[data-tipo='success'] {
+    background: #eef7e4;
+    border-color: rgba(121, 176, 55, 0.35);
+    border-left-color: var(--brand-green);
+
+    .toast__icon { color: var(--brand-green); background: rgba(121, 176, 55, 0.2); }
+    .toast__mensaje { color: #3c5a1c; }
+  }
+
+  &[data-tipo='error'] {
+    background: var(--brand-danger-bg);
+    border-color: rgba(179, 38, 30, 0.3);
+    border-left-color: var(--brand-danger);
+
+    .toast__icon { color: var(--brand-danger); background: rgba(179, 38, 30, 0.14); }
+    .toast__mensaje { color: var(--brand-danger); }
+  }
+
+  &[data-tipo='info'] {
+    background: #f8e9f0;
+    border-color: rgba(150, 0, 72, 0.25);
+    border-left-color: var(--brand-primary);
+
+    .toast__icon { color: var(--brand-primary); background: rgba(150, 0, 72, 0.14); }
+    .toast__mensaje { color: var(--brand-primary-dark); }
+  }
+
+  &__icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+
+    svg { width: 16px; height: 16px; }
+  }
+
+  &__mensaje {
+    flex: 1 1 auto;
+    padding-top: 0.15rem;
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--brand-ink);
+    line-height: 1.4;
+  }
+
+  &__cerrar {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--brand-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+
+    svg { width: 14px; height: 14px; }
+
+    &:hover {
+      background: var(--brand-bg);
+      color: var(--brand-ink);
+    }
+  }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 520px) {
+  .toast-stack {
+    top: auto;
+    bottom: 1rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    max-width: none;
+  }
+}

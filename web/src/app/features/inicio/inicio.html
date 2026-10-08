@@ -1,0 +1,130 @@
+<section class="pagina">
+  <header class="hero">
+    <div class="hero__texto">
+      <span class="pagina__eyebrow hero__eyebrow">SITranscripción</span>
+      <h1>{{ saludo }}{{ user() ? ',' : '' }} <span>{{ user()?.email }}</span></h1>
+      <p>
+        Transcribe sesiones del Pleno y de comisiones, corrige oradores y textos, y genera la
+        versión estenográfica en Word.
+      </p>
+      <div class="pagina__acciones">
+        <a class="btn btn--blanco" routerLink="/transcribir">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.8" />
+            <path d="M6 11a6 6 0 0 0 12 0M12 17v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+          Nueva transcripción
+        </a>
+        <a class="btn btn--transparente" routerLink="/sesiones">Ver sesiones</a>
+      </div>
+    </div>
+    <div class="hero__onda" aria-hidden="true">
+      @for (b of [8, 18, 28, 14, 34, 22, 40, 26, 16, 30, 12, 24, 36, 18, 10]; track $index) {
+        <span [style.height.px]="b * 2" [style.animation-delay.ms]="$index * 90"></span>
+      }
+    </div>
+  </header>
+
+  <div class="kpis">
+    <article class="kpi">
+      <span class="kpi__icono kpi__icono--primario" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /><path d="M9 12h6M9 15.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+      </span>
+      <div>
+        <span class="kpi__valor">{{ cargando() ? '—' : sesiones().length }}</span>
+        <span class="kpi__etiqueta">Sesiones transcritas</span>
+      </div>
+    </article>
+    <article class="kpi">
+      <span class="kpi__icono kpi__icono--info" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7" /><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+      </span>
+      <div>
+        <span class="kpi__valor">{{ cargando() ? '—' : duracion(totalHoras()) }}</span>
+        <span class="kpi__etiqueta">De audio transcrito</span>
+      </div>
+    </article>
+    <article class="kpi">
+      <span class="kpi__icono kpi__icono--ok" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 10h16M4 14h10M4 18h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+      </span>
+      <div>
+        <span class="kpi__valor">{{ cargando() ? '—' : totalSegmentos().toLocaleString('es-MX') }}</span>
+        <span class="kpi__etiqueta">Segmentos de texto</span>
+      </div>
+    </article>
+    <a class="kpi kpi--enlace" routerLink="/transcribir" [class.kpi--vivo]="activos() > 0">
+      <span class="kpi__icono kpi__icono--vivo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" fill="currentColor" /><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+      </span>
+      <div>
+        <span class="kpi__valor">{{ cargando() ? '—' : activos() }}</span>
+        <span class="kpi__etiqueta">Transcripciones en vivo</span>
+      </div>
+    </a>
+  </div>
+
+  <div class="columnas">
+    <div class="tarjeta">
+      <div class="tarjeta__titulo">
+        <div>
+          <h2>Sesiones recientes</h2>
+          <p>Las últimas sesiones guardadas en la base de datos.</p>
+        </div>
+        <a class="btn btn--outline btn--sm" routerLink="/sesiones">Ver todas</a>
+      </div>
+
+      @if (cargando()) {
+        @for (n of [1, 2, 3]; track n) {
+          <div class="skeleton fila-skeleton"></div>
+        }
+      } @else if (recientes().length === 0) {
+        <div class="vacio">
+          <span class="vacio__icono">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.7" /><path d="M6 11a6 6 0 0 0 12 0M12 17v3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+          </span>
+          <strong>Aún no hay sesiones</strong>
+          <span>Lanza tu primera transcripción para empezar.</span>
+        </div>
+      } @else {
+        <ul class="recientes">
+          @for (s of recientes(); track s.id) {
+            <li>
+              <a class="reciente" [routerLink]="['/sesiones', s.id]">
+                <span class="reciente__num">#{{ s.id }}</span>
+                <span class="reciente__datos">
+                  <span class="reciente__titulo">{{ s.titulo || 'Sesión ' + s.id }}</span>
+                  <span class="reciente__meta">{{ fecha(s.inicio) }} · {{ s.segmentos }} segmentos · {{ duracion(s.duracion_seg) }}</span>
+                </span>
+                <svg class="reciente__flecha" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </a>
+            </li>
+          }
+        </ul>
+      }
+    </div>
+
+    <div class="tarjeta">
+      <div class="tarjeta__titulo">
+        <div>
+          <h2>Flujo de trabajo</h2>
+          <p>De la transmisión al documento final.</p>
+        </div>
+      </div>
+      <ol class="pasos">
+        <li>
+          <a routerLink="/transcribir"><strong>Transcribir</strong><span>Desde una URL de video o un evento del Congreso.</span></a>
+        </li>
+        <li>
+          <a routerLink="/sesiones"><strong>Revisar</strong><span>Corrige oradores, divide turnos y aplica IA.</span></a>
+        </li>
+        <li>
+          <a routerLink="/esteno"><strong>Corregir en equipo</strong><span>Reparte la sesión en tramos entre correctores.</span></a>
+        </li>
+        <li>
+          <a routerLink="/sesiones"><strong>Exportar</strong><span>Descarga la versión estenográfica en Word.</span></a>
+        </li>
+      </ol>
+    </div>
+  </div>
+</section>

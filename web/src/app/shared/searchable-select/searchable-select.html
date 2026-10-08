@@ -1,0 +1,31 @@
+<div class="searchable-select" [class.is-disabled]="disabled()" [class.is-invalid]="invalid()">
+  <input
+    type="text"
+    autocomplete="off"
+    [placeholder]="placeholder()"
+    [disabled]="disabled()"
+    [ngModel]="query()"
+    (ngModelChange)="onQueryChange($event)"
+    (focus)="onFocus()"
+    (blur)="onBlur()"
+  />
+  <svg class="searchable-select__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true" [class.is-open]="open()">
+    <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+
+  @if (open()) {
+    <ul class="searchable-select__dropdown">
+      @if (resultados().length === 0) {
+        <li class="searchable-select__hint">Sin resultados</li>
+      } @else {
+        @for (opcion of resultados(); track opcion.id) {
+          <li>
+            <button type="button" [class.is-selected]="opcion.id === valor()" (mousedown)="seleccionar(opcion)">
+              {{ opcion.label }}
+            </button>
+          </li>
+        }
+      }
+    </ul>
+  }
+</div>

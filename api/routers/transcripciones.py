@@ -1,8 +1,10 @@
 import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import jobs, parlamentario
+from .. import jobs, lanzador, parlamentario
+from ..config import settings
 from ..schemas import (ParticipacionOut, TrabajoCrear, TrabajoDesdeEvento,
                        TrabajoOut)
 from ..security import usuario_actual
@@ -131,6 +133,16 @@ def reanudar_transcripcion(job_id: str, usuario=Depends(usuario_actual)):
     except ValueError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
     return _a_trabajo_out(jobs.obtener_trabajo(job_id))
+
+
+@router.get("/{job_id}/log")
+def ver_log(job_id: str, usuario=Depends(usuario_actual)):
+    """Últimas líneas de jobs_data/<job_id>/salida.log (lo que imprime el
+    transcriptor), para seguirlo desde la interfaz sin entrar al servidor."""
+    fila = _trabajo_o_404(job_id, usuario)
+    ruta = os.path.join(settings.jobs_dir, job_id, "salida.log")
+    return {"id": job_id, "estado": fila["estado"],
+            "lineas": lanzador.cola_de_log(ruta, max_bytes=20000)}
 
 
 @router.get("/{job_id}/participaciones", response_model=list[ParticipacionOut])

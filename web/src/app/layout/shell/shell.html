@@ -1,0 +1,117 @@
+<div class="shell">
+  <nav class="navbar navbar-expand-lg topbar sticky-top">
+    <div class="container-fluid px-3 px-lg-4">
+      <a class="navbar-brand topbar__brand" routerLink="/">
+        <img class="topbar__logo" src="assets/congreso-edomex-logo.png" alt="Congreso del Estado de México" />
+        <span class="topbar__divider d-none d-sm-block" aria-hidden="true"></span>
+        <span class="topbar__title">SITranscripción<br /><small>Versión estenográfica de sesiones</small></span>
+      </a>
+
+      <button
+        class="navbar-toggler"
+        type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#mainNav"
+        aria-controls="mainNav"
+        aria-expanded="false"
+        aria-label="Abrir menú"
+      >
+        <span class="navbar-toggler-icon"></span>
+      </button>
+
+      <div class="collapse navbar-collapse" id="mainNav">
+        <ul class="navbar-nav topbar__nav mx-lg-auto my-3 my-lg-0">
+          @for (item of nav(); track item.route) {
+            <li class="nav-item">
+              <a class="nav-link" [routerLink]="item.route" routerLinkActive="active" (click)="cerrarMenuMovil()">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  @switch (item.icono) {
+                    @case ('inicio') {
+                      <path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1v-7.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+                    }
+                    @case ('sesiones') {
+                      <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+                      <path d="M9 12h6M9 15.5h6M14 4v4h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                    }
+                    @case ('transcribir') {
+                      <rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.7" />
+                      <path d="M6 11a6 6 0 0 0 12 0M12 17v3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                    }
+                    @case ('esteno') {
+                      <circle cx="9" cy="8.5" r="3" stroke="currentColor" stroke-width="1.7" />
+                      <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5M16 6.5a2.6 2.6 0 0 1 0 5M17.5 14.6c1.6.5 2.7 1.9 3 4.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                    }
+                    @case ('usuarios') {
+                      <rect x="5" y="10.5" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.7" />
+                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="currentColor" stroke-width="1.7" />
+                    }
+                  }
+                </svg>
+                {{ item.label }}
+              </a>
+            </li>
+          }
+        </ul>
+
+        <div class="topbar__user d-flex align-items-center justify-content-between justify-content-lg-end gap-3">
+          @if (enVivo() > 0) {
+            <a class="chip chip--error chip--vivo en-vivo" routerLink="/transcribir" (click)="cerrarMenuMovil()" title="Transcripciones en curso">
+              <span class="chip__punto"></span>
+              En vivo · {{ enVivo() }}
+            </a>
+          }
+          @if (user(); as u) {
+            <span class="topbar__usuario">
+              <span class="topbar__avatar" aria-hidden="true">{{ u.email.charAt(0).toUpperCase() }}</span>
+              <span class="topbar__datos">
+                <span class="topbar__email">{{ u.email }}</span>
+                <span class="topbar__rol">{{ u.es_admin ? 'Administrador' : 'Corrector' }}</span>
+              </span>
+            </span>
+          }
+          <button type="button" class="logout" (click)="logout()">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M9 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path d="M14 8l4.5 4-4.5 4M18.2 12H9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Salir</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="content">
+    <router-outlet />
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <div class="site-footer__info text-center text-lg-start">
+        <p class="site-footer__copy mb-1">© 2026 Poder Legislativo del Estado de México</p>
+        <p class="mb-0">Sistema de transcripción y versión estenográfica</p>
+      </div>
+      <img class="site-footer__logo" src="assets/logo-animado.gif" alt="Congreso del Estado de México" loading="lazy" />
+      <div class="site-footer__info text-center text-lg-end">
+        <p class="mb-0">Av. Independencia No. 102, Col. Centro, C.P. 50000</p>
+        <p class="mb-0">Toluca de Lerdo, Estado de México</p>
+      </div>
+    </div>
+  </footer>
+
+  @if (inactivity.showWarning()) {
+    <div class="idle-overlay" role="alertdialog" aria-modal="true" aria-labelledby="idle-title">
+      <div class="idle-modal">
+        <h2 id="idle-title">¿Sigues ahí?</h2>
+        <p>
+          Por tu seguridad, la sesión se cerrará por inactividad en
+          <strong>{{ inactivity.secondsRemaining() }}</strong> segundos.
+        </p>
+        <div class="idle-modal__actions">
+          <button type="button" class="btn btn--primary" (click)="inactivity.staySignedIn()">Seguir conectado</button>
+          <button type="button" class="btn btn--outline" (click)="logout()">Cerrar sesión</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

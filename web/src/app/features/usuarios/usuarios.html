@@ -1,0 +1,73 @@
+<section class="pagina">
+  <header class="pagina__header">
+    <div>
+      <span class="pagina__eyebrow">Administración</span>
+      <h1>Usuarios</h1>
+      <p>
+        Cuentas para entrar a esta interfaz, al módulo estenográfico (correctores) y al agente de
+        captura de audio. La contraseña se genera sola y se muestra una sola vez.
+      </p>
+    </div>
+  </header>
+
+  <div class="tarjeta">
+    <div class="tarjeta__titulo">
+      <div>
+        <h2>Crear cuenta</h2>
+        <p>Para el agente de captura o un corrector, deja sin marcar «administrador».</p>
+      </div>
+    </div>
+    <form class="campos" (ngSubmit)="crear()">
+      <label class="campo campo--email">
+        <span class="campo__label">Email (será el usuario para iniciar sesión)</span>
+        <input type="email" name="email" [(ngModel)]="email" placeholder="corrector1@congreso.local" required />
+      </label>
+      <label class="casilla">
+        <input type="checkbox" name="esAdmin" [(ngModel)]="esAdmin" />
+        Es administrador
+      </label>
+      <button type="submit" class="btn btn--primary" [disabled]="!email.trim() || guardando()">
+        @if (guardando()) { <span class="spinner"></span> Creando… } @else { Crear cuenta }
+      </button>
+    </form>
+    @if (esAdmin) {
+      <p class="advertencia">Un administrador puede lanzar transcripciones, editar sesiones y crear otras cuentas.</p>
+    }
+  </div>
+
+  <div class="tarjeta">
+    <div class="tarjeta__titulo">
+      <div>
+        <h2>{{ usuarios().length }} cuentas</h2>
+        <p>{{ admins() }} administradores · {{ usuarios().length - admins() }} correctores / operadores</p>
+      </div>
+      <label class="buscador">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+        <input type="search" placeholder="Buscar por email…" [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
+      </label>
+    </div>
+
+    @if (cargando()) {
+      @for (n of [1, 2, 3]; track n) { <div class="skeleton" style="height: 58px; margin-bottom: 0.5rem"></div> }
+    } @else {
+      <ul class="usuarios">
+        @for (u of filtrados(); track u.id) {
+          <li class="usuario">
+            <span class="usuario__avatar" [class.usuario__avatar--admin]="u.es_admin">{{ inicial(u.email) }}</span>
+            <span class="usuario__email">
+              {{ u.email }}
+              @if (u.id === yo()?.id) { <small>(tú)</small> }
+            </span>
+            @if (u.es_admin) {
+              <span class="chip chip--primario">Administrador</span>
+            } @else {
+              <span class="chip chip--info">Corrector / operador</span>
+            }
+          </li>
+        } @empty {
+          <li class="vacio">Ninguna cuenta coincide con la búsqueda.</li>
+        }
+      </ul>
+    }
+  </div>
+</section>

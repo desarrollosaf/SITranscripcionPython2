@@ -2,11 +2,13 @@ from fastapi import FastAPI
 
 from . import jobs
 from .db_mysql import inicializar_esquema
-from .routers import auth, participantes, transcripciones, usuarios
+from .routers import (auth, esteno, lanzador, participantes, sesiones,
+                      transcripciones, usuarios)
 
 app = FastAPI(title="API de transcripción en vivo",
-              description="Lanza transcribir_en_vivo_c3.py acotado a los "
-                          "integrantes de un evento y consulta el resultado.")
+              description="Lanza transcribir_en_vivo_c3.py, revisa las "
+                          "sesiones transcritas y coordina el módulo "
+                          "estenográfico. La consume la interfaz web (web/).")
 
 
 @app.on_event("startup")
@@ -25,6 +27,9 @@ app.include_router(auth.router)
 app.include_router(usuarios.router)
 app.include_router(participantes.router)
 app.include_router(transcripciones.router)
+app.include_router(sesiones.router)
+app.include_router(esteno.router)
+app.include_router(lanzador.router)
 
 
 @app.get("/salud")

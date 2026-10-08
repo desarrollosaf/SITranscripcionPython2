@@ -1,0 +1,43 @@
+# Override para levantar todo en tu máquina sin depender de un MySQL
+# externo: agrega un MySQL propio y apunta "api" y "revisor" a él.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d mysql api web
+#
+# Interfaz web: http://localhost:${WEB_PORT:-4300}
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASS:-root}
+      MYSQL_DATABASE: ${DB_NAME:-transcripcion_api}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_PASS:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  api:
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASS=${DB_PASS:-root}
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  revisor:
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASS=${DB_PASS:-root}
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

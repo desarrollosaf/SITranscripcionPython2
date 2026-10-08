@@ -178,6 +178,50 @@ FROM participaciones WHERE sesion_id = 1
 GROUP BY orador ORDER BY minutos DESC;
 ```
 
+## Interfaz web (Angular + FastAPI)
+
+La carpeta `web/` es la interfaz nueva, con el mismo estilo que SIPresupuesto
+(Angular 22, Bootstrap, ag-grid). Habla solo con la API de FastAPI (`api/`),
+que ahora también expone todo lo que antes hacía `revisar.py`:
+
+```
+Navegador ──► web (nginx :4300) ──/api/*──► api (FastAPI :8000) ──► sesiones.db (SQLite)
+                                                    │                  MySQL (usuarios, trabajos)
+                                                    └─► transcribir_en_vivo_c3.py
+```
+
+| Pantalla | Qué hace | Endpoints |
+|---|---|---|
+| Inicio | Indicadores y sesiones recientes | `/sesiones`, `/transcripciones`, `/lanzador/estado` |
+| Sesiones → Revisar | Oradores, texto, dividir turnos, resúmenes, IA, Word | `/sesiones/{id}/...` |
+| Transcribir | Evento del Congreso o URL manual, log en vivo, trabajos | `/lanzador/...`, `/transcripciones/...` (incluye `/{id}/log`) |
+| Estenográfico | Plan de turnos, avance y editor del corrector con audio | `/esteno/{id}/...` |
+| Usuarios | Alta con contraseña generada | `/usuarios`, `/usuarios/generar` |
+
+Los correctores (cuentas no admin) solo ven el módulo estenográfico.
+
+### Levantarlo en tu máquina
+
+`docker-compose.local.yml` agrega un MySQL propio, así que no necesitas otro:
+
+```bash
+cp .env.example .env        # en local: DB_PASS=root y API_PORT libre (p. ej. 8010)
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build mysql api web
+
+# Primera vez: un administrador y (opcional) una sesión de demostración
+docker compose -f docker-compose.yml -f docker-compose.local.yml exec api python crear_admin.py --email admin@congreso.local --password Admin12345
+docker compose -f docker-compose.yml -f docker-compose.local.yml exec api python crear_demo.py
+```
+
+Abre http://localhost:4300. En el servidor se usa solo `docker-compose.yml`
+(con tu MySQL en `.env`) y el servicio `web`.
+
+Para desarrollar el frontend con recarga en vivo: `cd web && npm install && npm start`
+(http://localhost:4200, reenvía `/api` a `localhost:8010`; ver `web/proxy.conf.js`).
+
+`revisar.py` (servicio `revisor`, puerto 8756) sigue funcionando en paralelo
+sobre la misma base mientras se termina la transición.
+
 ## Correr con Docker
 
 Alternativa a instalar Python/ffmpeg/librerías a mano: todo queda dentro de un

@@ -53,14 +53,30 @@ services:
       - JWT_SECRET=${JWT_SECRET:-cambia-esta-clave}
       - SRT_PUERTO_BASE=${SRT_PUERTO_BASE:-9000}
       - SRT_PUERTO_FIN=${SRT_PUERTO_FIN:-9009}
+      # Corrección de estilo, orden del día y resúmenes con IA (pantalla
+      # de revisión de la interfaz web).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # URL base del sistema de registro parlamentario. Default: dominio
       # público. En redes con proxy/DNS interno restringido, apunta directo
       # al backend interno (ver .env.example) para saltarte el proxy público.
       - PARLAMENTARIO_API_URL=${PARLAMENTARIO_API_URL:-https://parlamentario.congresoedomex.gob.mx/backend/api/eventos/ultimoseventos}
 
-  # Interfaz visual de revisión (revisar.py): la página con la barra
+  # Interfaz web (Angular, carpeta web/) servida por nginx. nginx reenvía
+  # /api/* al servicio "api", así que el navegador solo habla con este
+  # puerto. Reemplaza a "revisor" (que sigue disponible mientras tanto).
+  web:
+    build: ./web
+    image: si-transcripcion-web:latest
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-4300}:80"
+    depends_on:
+      - api
+
+  # Interfaz visual de revisión ANTERIOR (revisar.py): la página con la barra
   # lateral, el texto por orador, edición de nombres/texto y resúmenes.
-  # Corre sobre la misma sesiones.db que "transcriptor"/"api".
+  # Corre sobre la misma sesiones.db que "transcriptor"/"api". La interfaz
+  # web (servicio "web") ya cubre todo esto; se conserva en paralelo.
   revisor:
     build: .
     image: si-transcripcion:latest

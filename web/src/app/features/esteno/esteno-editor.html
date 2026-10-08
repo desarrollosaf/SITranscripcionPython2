@@ -1,0 +1,99 @@
+<div class="cabecera tarjeta">
+  <div class="cabecera__fila">
+    <button type="button" class="btn btn--outline btn--sm" (click)="cerrar()" title="Suelta el bloque sin guardar">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      Volver a los bloques
+    </button>
+    <strong class="cabecera__titulo">Bloque {{ bloque().indice + 1 }}</strong>
+    <span class="cabecera__rango">{{ hms(bloque().inicio_seg) }} – {{ hms(bloque().fin_seg) }}</span>
+    @if (!hayAudio()) { <span class="chip chip--error">Sin audio</span> }
+  </div>
+
+  <div class="reproductor" [class.reproductor--inactivo]="!hayAudio()">
+    <button type="button" class="control" (click)="saltar(-5)" title="Atrasar 5 s (F1)">« 5s</button>
+    <button type="button" class="control control--play" (click)="alternarAudio()" title="Reproducir / pausar (F2)"
+            [attr.aria-label]="reproduciendo() ? 'Pausar' : 'Reproducir'">
+      @if (reproduciendo()) {
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" /><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" /></svg>
+      } @else {
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" fill="currentColor" /></svg>
+      }
+    </button>
+    <button type="button" class="control" (click)="saltar(5)" title="Adelantar 5 s (F3)">5s »</button>
+    <button type="button" class="control" (click)="irA(bloque().inicio_seg)" title="Ir al inicio del bloque">⟲</button>
+    <span class="reloj">{{ hms(actual() - bloque().inicio_seg, true) }} / {{ hms(duracion(), true) }}</span>
+    <input class="pista" type="range" min="0" max="1000" [value]="posicion()" (input)="moverPista($any($event.target).value)" aria-label="Posición en el tramo" />
+    <label class="casilla opcion"><input type="checkbox" [(ngModel)]="soloMiTramo" /> Solo mi tramo</label>
+    <label class="opcion">
+      Vel.
+      <select [ngModel]="velocidad" (ngModelChange)="cambiarVelocidad(+$event)">
+        @for (v of [0.75, 1, 1.25, 1.5]; track v) { <option [ngValue]="v">{{ v }}×</option> }
+      </select>
+    </label>
+  </div>
+</div>
+
+<datalist [id]="idLista">
+  @for (n of nombres(); track n) { <option [value]="n"></option> }
+</datalist>
+
+<div class="turnos">
+  @for (t of turnos(); track t.ids.join(','); let i = $index; let ultimo = $last) {
+    <div class="turno">
+      <button type="button" class="turno__hora" (click)="irA(t.inicio_seg, true)" title="Escuchar desde aquí">
+        {{ t.inicio_hms || hms(t.inicio_seg) }} ▸
+      </button>
+      <div class="turno__campos">
+        <div class="turno__orador">
+          <input class="orador" [attr.list]="idLista" [ngModel]="t.orador" (ngModelChange)="cambiarOrador(i, $event)" placeholder="Orador" />
+          <select class="elegir" title="Elegir de la lista de integrantes" (change)="elegirNombre(i, $any($event.target).value); $any($event.target).value = ''">
+            <option value="">— elegir integrante —</option>
+            @for (n of nombres(); track n) { <option [value]="n">{{ n }}</option> }
+          </select>
+        </div>
+
+        <div class="formato" role="toolbar" aria-label="Formato del texto">
+          <button type="button" [class.activo]="activos().has('bold')" (mousedown)="formato($event, 'bold')" title="Negrita (Ctrl+B)"><b>N</b></button>
+          <button type="button" [class.activo]="activos().has('italic')" (mousedown)="formato($event, 'italic')" title="Cursiva (Ctrl+I)"><i>C</i></button>
+          <button type="button" [class.activo]="activos().has('underline')" (mousedown)="formato($event, 'underline')" title="Subrayado (Ctrl+U)"><u>S</u></button>
+          <button type="button" [class.activo]="activos().has('strikeThrough')" (mousedown)="formato($event, 'strikeThrough')" title="Tachado"><s>T</s></button>
+          <span class="sep"></span>
+          <button type="button" [class.activo]="activos().has('justifyFull')" (mousedown)="formato($event, 'justifyFull')" title="Justificar">Just.</button>
+          <button type="button" [class.activo]="activos().has('justifyLeft')" (mousedown)="formato($event, 'justifyLeft')" title="Alinear a la izquierda">Izq.</button>
+          <button type="button" [class.activo]="activos().has('justifyCenter')" (mousedown)="formato($event, 'justifyCenter')" title="Centrar">Cent.</button>
+          <span class="sep"></span>
+          <button type="button" [class.activo]="activos().has('insertUnorderedList')" (mousedown)="formato($event, 'insertUnorderedList')" title="Lista con viñetas">• Lista</button>
+          <button type="button" [class.activo]="activos().has('insertOrderedList')" (mousedown)="formato($event, 'insertOrderedList')" title="Lista numerada">1. Lista</button>
+          <span class="sep"></span>
+          <button type="button" (mousedown)="formato($event, 'removeFormat')" title="Quitar formato">Sin formato</button>
+        </div>
+
+        <div class="editor-rico" contenteditable="true" spellcheck="true" [appEditorRico]="t.html"></div>
+
+        <div class="turno__pie">
+          @if (!ultimo) {
+            <button type="button" class="mini" (click)="unirConSiguiente(i)" title="Pegar este turno con el siguiente">🔗 Unir con el siguiente</button>
+          }
+          <button type="button" class="mini" (click)="abrirDivisor(i)" title="Partir este turno en dos oradores">✂ Dividir</button>
+        </div>
+
+        @if (dividiendo() === i) {
+          <app-divisor-turno [texto]="textoOriginal(t)" [oradorInicial]="t.orador" [nombres]="nombres()"
+                             [ocupado]="guardando()" (dividir)="dividir(i, $event)" (cancelar)="dividiendo.set(null)" />
+        }
+      </div>
+    </div>
+  } @empty {
+    <div class="vacio"><strong>Este bloque no tiene segmentos.</strong></div>
+  }
+</div>
+
+<div class="pie tarjeta">
+  <button type="button" class="btn btn--primary" [disabled]="guardando()" (click)="guardar(true)">
+    @if (guardando()) { <span class="spinner"></span> } @else { ✓ }
+    Guardar y terminar
+  </button>
+  <button type="button" class="btn btn--outline" [disabled]="guardando()" (click)="guardar(false)">Guardar avance</button>
+  <button type="button" class="btn btn--danger" [disabled]="guardando()" (click)="cerrar()">Salir sin guardar</button>
+  <span class="atajos">Atajos: <kbd>F1</kbd> atrasar · <kbd>F2</kbd> reproducir/pausar · <kbd>F3</kbd> adelantar</span>
+</div>

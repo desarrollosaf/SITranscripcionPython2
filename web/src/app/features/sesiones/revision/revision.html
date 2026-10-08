@@ -1,0 +1,235 @@
+<section class="pagina">
+  <header class="pagina__header">
+    <div>
+      <a class="volver" routerLink="/sesiones">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        Sesiones
+      </a>
+      @if (detalle(); as d) {
+        <h1>{{ d.sesion.titulo || 'Sesión ' + d.sesion.id }}</h1>
+        <p class="meta">
+          <span class="chip chip--primario">#{{ d.sesion.id }}</span>
+          <span>{{ fecha(d.sesion.inicio) }}</span>
+          <span>·</span>
+          <span>{{ turnos().length }} intervenciones</span>
+          @if (d.sesion.url?.startsWith('http')) {
+            <span>·</span>
+            <a [href]="d.sesion.url" target="_blank" rel="noopener">Ver video ↗</a>
+          }
+        </p>
+      } @else {
+        <div class="skeleton" style="height: 34px; width: 420px; max-width: 100%"></div>
+      }
+    </div>
+    <button type="button" class="vivo" [class.vivo--activo]="enVivo()" (click)="alternarVivo()"
+            title="Sigue la transcripción casi en tiempo real; se pausa mientras editas">
+      <span class="vivo__interruptor"><span></span></span>
+      Auto-actualizar
+    </button>
+  </header>
+
+  <!-- Barra de acciones por pasos -->
+  <nav class="barra tarjeta" aria-label="Acciones de la sesión">
+    <div class="grupo">
+      <span class="grupo__titulo"><span class="paso">1</span>Preparar</span>
+      <button type="button" class="btn btn--outline btn--sm" [disabled]="!!ocupado()" (click)="compactar()"
+              title="Une en la base los registros consecutivos del mismo orador">
+        @if (ocupado() === 'compactar') { <span class="spinner spinner--oscuro"></span> }
+        Unir iguales
+      </button>
+    </div>
+    <div class="grupo">
+      <span class="grupo__titulo"><span class="paso">2</span>Revisar con IA</span>
+      <button type="button" class="btn btn--ia btn--sm" [disabled]="!!ocupado()" (click)="corregirEstilo()">
+        @if (ocupado() === 'estilo') { <span class="spinner"></span> Corrigiendo… } @else { ✨ Corregir estilo }
+      </button>
+      <button type="button" class="btn btn--ia btn--sm" [disabled]="!!ocupado()" (click)="estructurar()">
+        @if (ocupado() === 'estructura') { <span class="spinner"></span> Analizando… } @else { 🗂 Numerar orden del día }
+      </button>
+      @if (secciones().size) {
+        <button type="button" class="btn btn--outline btn--sm" [disabled]="!!ocupado()" (click)="borrarEstructura()">Quitar numeración</button>
+      }
+    </div>
+    <div class="grupo">
+      <span class="grupo__titulo"><span class="paso">3</span>Exportar</span>
+      <button type="button" class="btn btn--primary btn--sm" [disabled]="!!ocupado()" (click)="descargarWord()">
+        @if (ocupado() === 'word') { <span class="spinner"></span> } @else {
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        }
+        Descargar Word
+      </button>
+    </div>
+    <div class="grupo">
+      <span class="grupo__titulo">Colaborar</span>
+      <a class="btn btn--outline btn--sm" [routerLink]="['/esteno', id()]">👥 Módulo estenográfico</a>
+    </div>
+  </nav>
+
+  @if (cargando()) {
+    <div class="cuerpo">
+      <div class="skeleton" style="height: 320px"></div>
+      <div>
+        @for (n of [1, 2, 3, 4]; track n) {
+          <div class="skeleton" style="height: 110px; margin-bottom: 1rem"></div>
+        }
+      </div>
+    </div>
+  } @else if (detalle()) {
+    <div class="cuerpo">
+      <!-- Oradores -->
+      <aside class="lateral tarjeta">
+        <h2>Oradores</h2>
+        @if (pendientes()) {
+          <p class="lateral__alerta">⚠ {{ pendientes() }} {{ pendientes() === 1 ? 'intervención' : 'intervenciones' }} sin orador identificado</p>
+        }
+        <ul class="oradores">
+          @for (o of oradores(); track o.nombre) {
+            <li>
+              <button type="button" class="orador-item"
+                      [class.orador-item--activo]="filtroOrador() === o.nombre"
+                      [class.orador-item--pendiente]="esDesconocido(o.nombre)"
+                      (click)="filtrarOrador(o.nombre)">
+                <span class="orador-item__nombre">{{ o.nombre || 'Sin nombre' }}</span>
+                <span class="orador-item__min">{{ o.minutos < 1 ? '<1' : (o.minutos | number: '1.0-0') }} min</span>
+              </button>
+            </li>
+          }
+        </ul>
+        <p class="lateral__nota">
+          Haz clic en un <strong>nombre</strong> dentro del texto para corregirlo. La <strong>hora</strong>
+          abre el video en ese minuto para verificar quién habla.
+        </p>
+      </aside>
+
+      <!-- Transcripción -->
+      <div class="transcripcion">
+        <div class="herramientas">
+          <label class="buscador">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+            <input type="search" placeholder="Buscar en el texto…" aria-label="Buscar en el texto"
+                   [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
+          </label>
+          @if (filtroOrador()) {
+            <button type="button" class="chip chip--primario filtro" (click)="filtroOrador.set(null)">
+              {{ filtroOrador() }} ✕
+            </button>
+          }
+          <span class="herramientas__total">{{ visibles().length }} de {{ turnos().length }}</span>
+        </div>
+
+        <datalist id="dlOradores">
+          @for (n of sugerencias(); track n) {
+            <option [value]="n"></option>
+          }
+        </datalist>
+
+        @if (visibles().length === 0) {
+          <div class="tarjeta vacio">
+            <strong>{{ turnos().length ? 'Sin resultados con este filtro' : 'Esta sesión no tiene participaciones todavía' }}</strong>
+            @if (!turnos().length) { <span>Si la transcripción está en curso, los bloques irán apareciendo solos.</span> }
+          </div>
+        }
+
+        @for (t of visibles(); track t.ids[0]) {
+          @if (secciones().get(t.ids[0]); as titulo) {
+            <h3 class="seccion">{{ titulo }}</h3>
+          }
+          <article class="turno" [class.turno--pendiente]="esDesconocido(t.orador)" [class.turno--abierto]="panelDe(t)">
+            @if (enlace(t); as url) {
+              <a class="turno__hora" [href]="url" target="_blank" rel="noopener" title="Ver este momento en el video">{{ hms(t.inicio) }} ▸</a>
+            } @else {
+              <span class="turno__hora">{{ hms(t.inicio) }}</span>
+            }
+
+            <div class="turno__cuerpo">
+              <div class="turno__cabecera">
+                <button type="button" class="turno__orador" title="Corregir orador" (click)="abrirOrador(t)">
+                  {{ esDesconocido(t.orador) ? '⚠ Sin identificar' : t.orador }}
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
+                </button>
+
+                @if (t.revIa) {
+                  <span class="chip" [class.chip--ok]="t.revIa === 'validado'" [class.chip--warn]="t.revIa === 'media'"
+                        [class.chip--error]="t.revIa === 'descartado'" [title]="t.motivoIa">
+                    {{ t.revIa === 'validado' ? '✓ Validado por IA' : t.revIa === 'media' ? '◐ Validado (media)' : '✗ Descartado por IA' }}
+                  </span>
+                }
+                @if (t.voz && t.voz !== t.orador) {
+                  <button type="button" class="chip chip--ia sugerencia" [disabled]="!!ocupado()"
+                          title="Aplicar esta sugerencia de la huella de voz" (click)="asignar(t, t.voz, 'Sugerencia de voz aplicada')">
+                    🎙 Voz: {{ t.voz }} ({{ t.vozSim | number: '1.2-2' }}) · aplicar
+                  </button>
+                }
+
+                <span class="turno__acciones">
+                  <button type="button" class="mini" (click)="abrirTexto(t)" title="Corregir el texto">✏ Texto</button>
+                  <button type="button" class="mini" (click)="abrirDividir(t)" title="Separar dos oradores dentro de este turno">✂ Dividir</button>
+                  <button type="button" class="mini" [class.mini--activo]="tieneResumen(t)" [disabled]="resumenCargando() === t.ids[0]"
+                          (click)="pedirResumen(t)" title="Resumen ejecutivo de la intervención">
+                    {{ resumenCargando() === t.ids[0] ? 'Generando…' : tieneResumen(t) ? '📋 Resumen ✓' : '📋 Resumen' }}
+                  </button>
+                </span>
+              </div>
+
+              <p class="turno__texto" [innerHTML]="textoResaltado(t)"></p>
+
+              @switch (panelDe(t)) {
+                @case ('orador') {
+                  <div class="editor">
+                    <label class="campo editor__campo">
+                      <span class="campo__label">Orador</span>
+                      <input list="dlOradores" [(ngModel)]="nuevoOrador" (keydown.enter)="asignar(t, nuevoOrador)" autofocus />
+                    </label>
+                    <div class="editor__botones">
+                      <button type="button" class="btn btn--primary btn--sm" [disabled]="!nuevoOrador.trim() || !!ocupado()" (click)="asignar(t, nuevoOrador)">Cambiar este turno</button>
+                      @if (anterior(t); as prev) {
+                        <button type="button" class="btn btn--outline btn--sm" [disabled]="!!ocupado()" [title]="'Asignar: ' + prev.orador" (click)="asignar(t, prev.orador, 'Unido con ' + prev.orador)">⬆ Unir con el anterior</button>
+                      }
+                      @if (siguiente(t); as next) {
+                        <button type="button" class="btn btn--outline btn--sm" [disabled]="!!ocupado()" [title]="'Asignar: ' + next.orador" (click)="asignar(t, next.orador, 'Unido con ' + next.orador)">⬇ Unir con el siguiente</button>
+                      }
+                      <button type="button" class="btn btn--outline btn--sm" [disabled]="!nuevoOrador.trim() || !!ocupado()" (click)="renombrarEnSesion(t)" [title]="'Cambiar «' + t.orador + '» en toda la sesión'">Cambiar en toda la sesión</button>
+                      <button type="button" class="btn btn--sm cancelar" (click)="panel.set(null)">Cancelar</button>
+                    </div>
+                  </div>
+                }
+                @case ('texto') {
+                  <div class="editor">
+                    @for (id of t.ids; track id; let k = $index) {
+                      <label class="campo">
+                        @if (t.ids.length > 1) { <span class="campo__label">Segmento {{ k + 1 }}</span> }
+                        <textarea rows="3" [(ngModel)]="textosEditados[k]"></textarea>
+                      </label>
+                    }
+                    <div class="editor__botones">
+                      <button type="button" class="btn btn--primary btn--sm" [disabled]="!!ocupado()" (click)="guardarTexto(t)">Guardar texto</button>
+                      <button type="button" class="btn btn--sm cancelar" (click)="panel.set(null)">Cancelar</button>
+                    </div>
+                  </div>
+                }
+                @case ('dividir') {
+                  <app-divisor-turno [texto]="t.textos.join(' ')" [oradorInicial]="t.orador" [nombres]="sugerencias()"
+                                     [ocupado]="!!ocupado()" (dividir)="dividir(t, $event)" (cancelar)="panel.set(null)" />
+                }
+              }
+
+              @if (resumenVisible(t)) {
+                <div class="resumen">
+                  <div class="resumen__cabecera">
+                    <strong>Resumen ejecutivo</strong>
+                    <span>
+                      <button type="button" class="mini" (click)="copiarResumen(t)">Copiar</button>
+                      <button type="button" class="mini" (click)="borrarResumen(t)">Borrar</button>
+                      <button type="button" class="mini" (click)="pedirResumen(t)">Ocultar</button>
+                    </span>
+                  </div>
+                  <div class="resumen__md" [innerHTML]="resumenHtml(t)"></div>
+                </div>
+              }
+            </div>
+          </article>
+        }
+      </div>
+    </div>
+  }
+</section>

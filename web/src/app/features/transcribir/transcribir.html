@@ -1,0 +1,195 @@
+<section class="pagina">
+  <header class="pagina__header">
+    <div>
+      <span class="pagina__eyebrow">Captura</span>
+      <h1>Nueva transcripción</h1>
+      <p>
+        Elige un evento del sistema del Congreso (los participantes salen solos) o pega la URL de una
+        transmisión. El texto aparece en <a routerLink="/sesiones">Sesiones</a> conforme avanza.
+      </p>
+    </div>
+  </header>
+
+  <div class="tarjeta">
+    <div class="origenes" role="tablist">
+      <button type="button" role="tab" class="origen" [class.origen--activo]="origen() === 'evento'" (click)="origen.set('evento')">
+        <span class="origen__icono"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="1.7" /><path d="M4 10h16M9 3.5v4M15 3.5v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg></span>
+        <span><strong>Evento del Congreso</strong><small>Sesiones y comisiones registradas</small></span>
+      </button>
+      <button type="button" role="tab" class="origen" [class.origen--activo]="origen() === 'url'" (click)="origen.set('url')">
+        <span class="origen__icono"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg></span>
+        <span><strong>URL manual</strong><small>YouTube u otra transmisión</small></span>
+      </button>
+    </div>
+
+    @if (origen() === 'evento') {
+      <div class="campos">
+        <label class="campo campo--tipo">
+          <span class="campo__label">Tipo de evento</span>
+          <select [ngModel]="tipoEvento()" (ngModelChange)="cambiarTipoEvento(+$event)">
+            <option [ngValue]="1">Sesión / Diputación permanente</option>
+            <option [ngValue]="0">Comisión</option>
+          </select>
+        </label>
+        <label class="campo campo--modelo">
+          <span class="campo__label">Modelo de transcripción</span>
+          <select [(ngModel)]="modelo">
+            @for (m of modelos; track m.valor) { <option [value]="m.valor">{{ m.texto }}</option> }
+          </select>
+        </label>
+        <button type="button" class="btn btn--outline" (click)="cargarEventos()" [disabled]="cargandoEventos()">Actualizar lista</button>
+      </div>
+
+      <div class="eventos">
+        @if (cargandoEventos()) {
+          @for (n of [1, 2, 3]; track n) { <div class="skeleton evento-skeleton"></div> }
+        } @else if (errorEventos()) {
+          <div class="aviso aviso--error">{{ errorEventos() }}</div>
+        } @else if (eventos().length === 0) {
+          <div class="vacio"><strong>Sin eventos recientes de este tipo</strong></div>
+        } @else {
+          @for (e of eventos(); track e.id) {
+            <button type="button" class="evento" [class.evento--elegido]="eventoElegido() === e.id" (click)="eventoElegido.set(e.id)">
+              <span class="evento__radio"></span>
+              <span class="evento__datos">
+                <span class="evento__fecha">{{ e.fecha }}</span>
+                <span class="evento__titulo">{{ e.comisiones.length ? e.comisiones.join(', ') : (e.descripcion || 'Sin comisión') }}</span>
+                @if (e.descripcion && e.comisiones.length) { <span class="evento__desc">{{ e.descripcion }}</span> }
+              </span>
+              <span class="evento__chips">
+                <span class="chip">{{ e.participantes }} participantes</span>
+                @if (e.liga) {
+                  <span class="chip chip--info">YouTube</span>
+                } @else {
+                  <span class="chip chip--primario">Audio SRT</span>
+                }
+              </span>
+            </button>
+          }
+        }
+      </div>
+
+      <div class="pie">
+        <p class="pie__nota">Si el evento trae liga de YouTube se transcribe de ahí; si no, queda esperando el audio SRT de la consola.</p>
+        <button type="button" class="btn btn--primary" [disabled]="!eventoElegido() || enviando()" (click)="crearDesdeEvento()">
+          @if (enviando()) { <span class="spinner"></span> Creando… } @else { Iniciar transcripción }
+        </button>
+      </div>
+    } @else {
+      @if (contextos(); as c) {
+        @if (!c.tiene_transcriptor || !c.disponible) {
+          <div class="aviso">
+            @if (!c.tiene_transcriptor) { No se encuentra el script de transcripción junto a la API. }
+            @if (!c.disponible) { No hay <code>{{ c.archivo }}</code>: puedes transcribir el Pleno, pero el tipo Comisión no tendrá lista. }
+          </div>
+        }
+      }
+      <div class="campos">
+        <label class="campo campo--url">
+          <span class="campo__label">URL del video o transmisión</span>
+          <input type="url" [(ngModel)]="url" placeholder="https://www.youtube.com/watch?v=…" [disabled]="!!manual()?.corriendo" />
+        </label>
+        <label class="campo campo--tipo">
+          <span class="campo__label">Tipo de sesión</span>
+          <select [(ngModel)]="tipo" [disabled]="!!manual()?.corriendo">
+            <option value="pleno">Pleno (sesión)</option>
+            <option value="comision">Comisión</option>
+          </select>
+        </label>
+        @if (tipo === 'pleno') {
+          <label class="campo campo--fecha">
+            <span class="campo__label">Fecha (opcional)</span>
+            <input type="date" [(ngModel)]="fecha" [disabled]="!!manual()?.corriendo" />
+          </label>
+        }
+        <label class="campo campo--modelo">
+          <span class="campo__label">Modelo</span>
+          <select [(ngModel)]="modelo" [disabled]="!!manual()?.corriendo">
+            @for (m of modelos; track m.valor) { <option [value]="m.valor">{{ m.texto }}</option> }
+          </select>
+        </label>
+      </div>
+      @if (tipo === 'comision') {
+        <label class="campo campo--comisiones">
+          <span class="campo__label">Comisión(es)</span>
+          <select multiple [(ngModel)]="comisiones" [disabled]="!!manual()?.corriendo">
+            @for (c of contextos()?.comisiones ?? []; track c) { <option [value]="c">{{ c }}</option> }
+          </select>
+          <span class="campo__ayuda">Ctrl/Cmd + clic para elegir varias comisiones unidas.</span>
+        </label>
+      }
+
+      <div class="pie">
+        @if (manual()?.corriendo) {
+          <span class="chip chip--error chip--vivo"><span class="chip__punto"></span>Transcribiendo · PID {{ manual()?.pid }}</span>
+          <button type="button" class="btn btn--danger" (click)="detenerManual()">Detener</button>
+        } @else {
+          @if (manual()?.lineas) {
+            <span class="chip" [class.chip--ok]="!manual()?.codigo" [class.chip--error]="!!manual()?.codigo">
+              {{ !manual()?.codigo ? 'Última transcripción finalizada' : 'Terminó con código ' + manual()?.codigo }}
+            </span>
+          }
+          <button type="button" class="btn btn--primary" [disabled]="enviando()" (click)="iniciarManual()">
+            @if (enviando()) { <span class="spinner"></span> Iniciando… } @else { Iniciar transcripción }
+          </button>
+        }
+      </div>
+
+      @if (manual()?.lineas) {
+        <div class="log-cabecera">
+          <strong>Log del transcriptor</strong>
+          <span>transcripcion_en_curso.log</span>
+        </div>
+        <pre class="log" #logManual>{{ manual()?.lineas }}</pre>
+      }
+    }
+  </div>
+
+  <div class="tarjeta">
+    <div class="tarjeta__titulo">
+      <div>
+        <h2>Trabajos de la API</h2>
+        <p>
+          Transcripciones creadas desde un evento del Congreso.
+          @if (activos()) { <strong>{{ activos() }} en curso.</strong> }
+          Un trabajo detenido desaparece de la lista del operador de audio; al reanudarlo sigue escribiendo en la misma sesión.
+        </p>
+      </div>
+      <button type="button" class="btn btn--outline btn--sm" (click)="cargarTrabajos()">Actualizar</button>
+    </div>
+
+    @if (cargandoTrabajos()) {
+      <div class="skeleton" style="height: 180px"></div>
+    } @else if (trabajos().length === 0) {
+      <div class="vacio">
+        <span class="vacio__icono"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg></span>
+        <strong>Todavía no hay trabajos</strong>
+        <span>Elige un evento del Congreso arriba para crear el primero.</span>
+      </div>
+    } @else {
+      <ag-grid-angular
+        class="tabla"
+        [theme]="theme"
+        [localeText]="localeText"
+        [rowData]="trabajos()"
+        [columnDefs]="columnas"
+        [defaultColDef]="defaultColDef"
+        [getRowId]="getRowId"
+        [domLayout]="'autoHeight'"
+        [pagination]="trabajos().length > 10"
+        [paginationPageSize]="10"
+        [paginationPageSizeSelector]="false"
+        [tooltipShowDelay]="300"
+      />
+    }
+
+    @if (logAbierto(); as l) {
+      <div class="log-cabecera">
+        <strong>Log del trabajo</strong>
+        <span><code>jobs_data/{{ l.id }}/salida.log</code></span>
+        <button type="button" class="btn btn--outline btn--sm" (click)="logAbierto.set(null)">Cerrar</button>
+      </div>
+      <pre class="log" #logTrabajo>{{ l.lineas || 'El log está vacío todavía.' }}</pre>
+    }
+  </div>
+</section>

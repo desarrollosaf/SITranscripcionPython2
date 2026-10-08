@@ -1,0 +1,261 @@
+<section class="pagina">
+  @if (abierto(); as b) {
+    <app-esteno-editor [sesionId]="id()" [abierto]="b" [nombres]="nombres()" [hayAudio]="!!estado()?.audio"
+                       (salir)="alSalirDelEditor()" />
+  } @else {
+    <header class="pagina__header">
+      <div>
+        <a class="volver" routerLink="/esteno">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          Elegir otra sesión
+        </a>
+        <h1>{{ estado()?.sesion?.titulo || 'Sesión ' + id() }}</h1>
+        <p class="meta">
+          <span class="chip chip--primario">#{{ id() }}</span>
+          <span>Duración: {{ duracion(estado()?.total_seg) }}</span>
+          @if (estado()?.en_vivo) {
+            <span class="chip chip--error chip--vivo"><span class="chip__punto"></span>Transcribiendo en vivo</span>
+          }
+          @if (estado(); as e) {
+            <span class="chip" [class.chip--ok]="e.audio" [class.chip--error]="!e.audio">{{ e.audio ? 'Audio disponible' : 'Sin audio' }}</span>
+          }
+        </p>
+      </div>
+      @if (esAdmin()) {
+        <div class="pestanas" role="tablist">
+          <button type="button" role="tab" [class.activa]="vista() === 'plan'" (click)="vista.set('plan')">Plan y avance</button>
+          <button type="button" role="tab" [class.activa]="vista() === 'bloques'" (click)="vista.set('bloques')">Corregir bloques</button>
+        </div>
+      }
+    </header>
+
+    @if (config()) {
+      <div class="progreso tarjeta">
+        <div class="progreso__texto">
+          <strong>{{ progreso().pct }}%</strong>
+          <span>{{ progreso().terminados }} de {{ progreso().total }} bloques terminados</span>
+        </div>
+        <div class="progreso__barra"><span [style.width.%]="progreso().pct"></span></div>
+      </div>
+    }
+
+    @if (cargando()) {
+      <div class="skeleton" style="height: 260px"></div>
+    } @else if (esAdmin() && vista() === 'plan') {
+      <!-- ===================== ADMINISTRADOR ===================== -->
+      <div class="columnas">
+        <div class="tarjeta">
+          <div class="tarjeta__titulo">
+            <div>
+              <h2>Plan de turnos</h2>
+              <p>
+                La duración es un mínimo: si al cumplirse hay alguien hablando, el bloque se extiende hasta
+                que termine (no se parten intervenciones). Los bloques se reparten en rotación.
+              </p>
+            </div>
+          </div>
+          <div class="campos">
+            <label class="campo">
+              <span class="campo__label">Número de correctores</span>
+              <input type="number" min="1" max="50" [(ngModel)]="numCorrectores" />
+            </label>
+            <label class="campo">
+              <span class="campo__label">Minutos por bloque</span>
+              <input type="number" min="1" max="120" [(ngModel)]="minutosBloque" />
+            </label>
+          </div>
+          <div class="asignaciones">
+            @for (i of turnos(); track i) {
+              <label class="campo">
+                <span class="campo__label">Turno {{ i + 1 }}</span>
+                <select [ngModel]="asignados[i] ?? ''" (ngModelChange)="asignados[i] = $event">
+                  <option value="">— sin asignar —</option>
+                  @for (u of usuarios(); track u.id) {
+                    <option [value]="u.email">{{ u.email }}{{ u.es_admin ? ' (admin)' : '' }}</option>
+                  }
+                </select>
+              </label>
+            }
+          </div>
+          <p class="nota">¿Falta alguien? Crea su cuenta en <a routerLink="/usuarios">Usuarios</a>.</p>
+          <button type="button" class="btn btn--primary" [disabled]="guardandoPlan()" (click)="generarPlan()">
+            @if (guardandoPlan()) { <span class="spinner"></span> }
+            {{ config() ? 'Actualizar plan' : 'Generar plan' }}
+          </button>
+        </div>
+
+        <div class="lateral">
+          <div class="tarjeta">
+            <div class="tarjeta__titulo"><div><h2>Audio de la sesión</h2><p>Si se transcribió conservando el audio, se enlaza solo. Esto es solo para apuntarlo a mano.</p></div></div>
+            <label class="campo">
+              <span class="campo__label">Ruta del archivo de audio</span>
+              <input type="text" [(ngModel)]="rutaAudio" placeholder="/app/audio/sesion_12.m4a" />
+            </label>
+            <button type="button" class="btn btn--outline btn--sm boton-audio" [disabled]="!rutaAudio.trim()" (click)="vincularAudio()">Vincular audio</button>
+          </div>
+
+          @if (config()) {
+            <div class="tarjeta">
+              <div class="tarjeta__titulo"><div><h2>Enlace para correctores</h2><p>El mismo para todos: cada quien entra con su cuenta y ve sus turnos.</p></div></div>
+              <div class="enlace">
+                <code>{{ enlace() }}</code>
+                <button type="button" class="btn btn--outline btn--sm" (click)="copiarEnlace()">Copiar</button>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+
+      @if (config()) {
+        <div class="tarjeta">
+          <div class="tarjeta__titulo">
+            <div>
+              <h2>Avance por bloque</h2>
+              <p>Se actualiza solo cada pocos segundos.</p>
+            </div>
+            <div class="filtros">
+              <label class="campo">
+                <span class="campo__label">Ver bloques de</span>
+                <select [ngModel]="filtroCorrector()" (ngModelChange)="filtroCorrector.set($event)">
+                  <option value="">— todos —</option>
+                  @for (p of personas(); track p) { <option [value]="p">{{ p }}</option> }
+                </select>
+              </label>
+              @if (filtroCorrector()) {
+                <button type="button" class="btn btn--outline btn--sm" [disabled]="!!descargando()" (click)="descargarWord('corrector')">📄 Word de esta persona</button>
+              }
+              <button type="button" class="btn btn--outline btn--sm" [disabled]="!!descargando()" (click)="descargarWord('autores')"
+                      title="Word completo con una nota antes de cada tramo diciendo quién lo corrigió">📄 Word con autores</button>
+            </div>
+          </div>
+
+          @if (bloquesFiltrados().length === 0) {
+            <div class="vacio">
+              <strong>{{ filtroCorrector() ? filtroCorrector() + ' todavía no ha tocado ningún bloque.' : 'El plan aún no tiene bloques.' }}</strong>
+              @if (!filtroCorrector()) { <span>Aparecerán en cuanto la transcripción avance.</span> }
+            </div>
+          } @else {
+            <div class="tabla-scroll">
+              <table class="plan">
+                <thead>
+                  <tr><th>#</th><th>Tramo</th><th>Asignado a</th><th>Estado</th><th>Segmentos</th></tr>
+                </thead>
+                <tbody>
+                  @for (b of bloquesFiltrados(); track b.indice) {
+                    <tr>
+                      <td class="plan__num">{{ b.indice + 1 }}</td>
+                      <td class="plan__tramo">{{ hms(b.inicio_seg) }} – {{ hms(b.fin_seg) }}</td>
+                      <td>
+                        <select class="plan__select" [ngModel]="b.slot" (ngModelChange)="reasignar(b, +$event)">
+                          @for (i of turnos(); track i) { <option [ngValue]="i">{{ nombreSlot(i) }}</option> }
+                        </select>
+                      </td>
+                      <td>
+                        @switch (b.estado) {
+                          @case ('terminado') { <span class="chip chip--ok">Terminado · {{ b.terminado_por }}</span> }
+                          @case ('editando') { <span class="chip chip--warn">Editando · {{ b.tomado_por }}{{ b.vencido ? ' (inactivo)' : '' }}</span> }
+                          @default { <span class="chip">{{ b.listo ? 'Pendiente' : '⏳ Grabando…' }}</span> }
+                        }
+                      </td>
+                      <td>{{ b.segmentos }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      }
+    } @else {
+      <!-- ===================== CORRECTOR ===================== -->
+      @if (!config()) {
+        <div class="tarjeta vacio">
+          <span class="vacio__icono"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7" /><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg></span>
+          <strong>Aún no hay plan de turnos</strong>
+          <span>El administrador todavía no reparte esta sesión. Esta página se actualiza sola.</span>
+        </div>
+      } @else {
+        @if (miSlot() === null) {
+          <div class="tarjeta elegir-turno">
+            <div>
+              <h2>¿Qué turno tienes?</h2>
+              <p>Tu cuenta ({{ yo()?.email }}) no está asignada en el plan. Elige tu turno para ver primero tus bloques (igual puedes ayudar en cualquiera).</p>
+            </div>
+            <div class="elegir-turno__opciones">
+              @for (i of turnos(); track i) {
+                <button type="button" class="btn btn--outline btn--sm" (click)="elegirSlot(i)">{{ nombreSlot(i) }}</button>
+              }
+            </div>
+          </div>
+        }
+
+        @if (bloques().length === 0) {
+          <div class="tarjeta vacio">
+            <strong>El plan aún no tiene bloques</strong>
+            <span>La sesión todavía no tiene texto transcrito. Los bloques aparecerán solos.</span>
+          </div>
+        } @else {
+          @if (miSlot() !== null) {
+            <div class="tarjeta">
+              <div class="tarjeta__titulo">
+                <div>
+                  <h2>Mis bloques · {{ nombreSlot(miSlot()!) }}</h2>
+                  <p>Abre un bloque para corregirlo escuchando su tramo. Al terminar, guárdalo para que cuente en el documento final.</p>
+                </div>
+              </div>
+              <div class="bloques">
+                @for (b of misBloques(); track b.indice) {
+                  <ng-container [ngTemplateOutlet]="tarjetaBloque" [ngTemplateOutletContext]="{ $implicit: b, mio: true }" />
+                } @empty {
+                  <p class="nota">Por ahora no tienes bloques asignados.</p>
+                }
+              </div>
+            </div>
+          }
+          <div class="tarjeta">
+            <div class="tarjeta__titulo">
+              <div><h2>{{ miSlot() === null ? 'Bloques' : 'Otros bloques' }}</h2><p>Puedes ayudar con cualquier bloque libre.</p></div>
+            </div>
+            <div class="bloques">
+              @for (b of otrosBloques(); track b.indice) {
+                <ng-container [ngTemplateOutlet]="tarjetaBloque" [ngTemplateOutletContext]="{ $implicit: b, mio: false }" />
+              }
+            </div>
+          </div>
+        }
+      }
+    }
+  }
+</section>
+
+<ng-template #tarjetaBloque let-b let-mio="mio">
+  <div class="bloque" [class.bloque--mio]="mio" [class.bloque--grabando]="!b.listo" [class.bloque--terminado]="b.estado === 'terminado'">
+    <div class="bloque__cabecera">
+      <strong>Bloque {{ b.indice + 1 }}</strong>
+      @switch (b.estado) {
+        @case ('terminado') { <span class="chip chip--ok">✓ Terminado</span> }
+        @case ('editando') {
+          @if (b.tomado_por === yo()?.email) {
+            <span class="chip chip--info">Lo tienes tú</span>
+          } @else {
+            <span class="chip chip--warn">{{ b.tomado_por }}{{ b.vencido ? ' (inactivo)' : '' }}</span>
+          }
+        }
+        @default { <span class="chip">Pendiente</span> }
+      }
+    </div>
+    <p class="bloque__tramo">{{ hms(b.inicio_seg) }} – {{ hms(b.fin_seg) }}</p>
+    <p class="bloque__meta">{{ b.segmentos }} segmentos · {{ nombreSlot(b.slot) }}</p>
+    @if (!b.listo) {
+      <span class="chip chip--warn">⏳ Aún se está grabando</span>
+    } @else if (libre(b)) {
+      <button type="button" class="btn btn--sm" [class.btn--primary]="mio" [class.btn--outline]="!mio"
+              [disabled]="abriendo() !== null" (click)="abrir(b)">
+        @if (abriendo() === b.indice) { <span class="spinner" [class.spinner--oscuro]="!mio"></span> }
+        {{ b.estado === 'terminado' ? 'Revisar de nuevo' : 'Abrir y corregir' }}
+      </button>
+    } @else {
+      <button type="button" class="btn btn--outline btn--sm" disabled>En uso</button>
+    }
+  </div>
+</ng-template>

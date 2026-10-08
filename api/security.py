@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 
@@ -9,6 +10,7 @@ from .config import settings
 from .db_mysql import conexion
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_opcional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -33,6 +35,18 @@ def obtener_usuario_por_email(email: str):
 
 
 async def usuario_actual(token: str = Depends(oauth2_scheme)):
+    return _usuario_de_token(token)
+
+
+async def usuario_actual_o_query(token_header: Optional[str] = Depends(oauth2_opcional),
+                                 token: Optional[str] = Query(None)):
+    """Como usuario_actual, pero también acepta ?token=... en la URL: un
+    <audio src> o un enlace de descarga no pueden mandar el encabezado
+    Authorization."""
+    return _usuario_de_token(token_header or token or "")
+
+
+def _usuario_de_token(token: str):
     credenciales_invalidas = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Credenciales inválidas",

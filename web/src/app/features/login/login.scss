@@ -1,0 +1,191 @@
+:host {
+  --primary: var(--brand-primary);
+  --primary-dark: var(--brand-primary-dark);
+  --ink: var(--brand-ink);
+  --muted: var(--brand-muted);
+  --border: var(--brand-border);
+  --danger: var(--brand-danger);
+  --danger-bg: var(--brand-danger-bg);
+
+  display: block;
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 600px at 15% -10%, rgba(255, 255, 255, 0.1), transparent 60%),
+    linear-gradient(160deg, var(--primary-dark) 0%, var(--primary) 55%, #4a1226 100%);
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: 3rem 1.25rem;
+  min-height: 100vh;
+
+  &__footer {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.78rem;
+    text-align: center;
+  }
+}
+
+.card {
+  width: 100%;
+  max-width: 400px;
+  background: #fff;
+  border-radius: 20px;
+  padding: 2.25rem 2rem 1.75rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  text-align: center;
+  animation: rise 0.35s ease-out;
+
+  &__logo {
+    display: block;
+    height: 46px;
+    width: auto;
+    margin: 0 auto 0.9rem;
+  }
+
+  &__wordmark {
+    display: inline-block;
+    margin: 0 auto 1.25rem;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.35rem;
+    color: var(--ink);
+  }
+
+  &__subtitle {
+    margin: 0.35rem 0 1.5rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.05rem;
+  text-align: left;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+
+  &__label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: 0.02em;
+  }
+
+  &__control {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #f4f6f5;
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--brand-primary-soft);
+    }
+  }
+
+  &__icon {
+    width: 18px;
+    height: 18px;
+    margin-left: 0.85rem;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  &__toggle {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    margin-right: 0.15rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 8px;
+
+    svg { width: 19px; height: 19px; }
+    &:hover { color: var(--primary); background: var(--brand-primary-soft); }
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.7rem 0.75rem;
+    border: none;
+    background: transparent;
+    font-size: 0.95rem;
+    color: var(--ink);
+    outline: none;
+
+    &::placeholder { color: #9aa8a1; }
+  }
+}
+
+.submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+  padding: 0.8rem;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
+  box-shadow: 0 10px 20px var(--brand-primary-soft);
+
+  &:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 14px 26px rgba(150, 0, 72, 0.24); }
+  &:active:not(:disabled) { transform: translateY(0); }
+  &:disabled { opacity: 0.75; cursor: progress; }
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 420px) {
+  .card { padding: 1.75rem 1.25rem 1.5rem; }
+  .stage { padding: 2rem 1rem; }
+}

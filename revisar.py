@@ -3166,6 +3166,304 @@ def turnos_de_sesion(con, sesion_id):
 # Servidor
 # ---------------------------------------------------------------------------
 
+def conectar_db(ruta_db):
+    """Abre la base SQLite de sesiones y crea (si faltan) las tablas
+    propias de la revisión: resúmenes, estructura y módulo estenográfico."""
+    # timeout: espera hasta 30 s si otro proceso (el transcriptor en
+    # vivo) está escribiendo, en vez de fallar con "database is locked".
+    con = sqlite3.connect(ruta_db, timeout=30)
+    con.row_factory = sqlite3.Row
+    # WAL permite leer mientras otro escribe; busy_timeout refuerza la
+    # espera a nivel del motor SQLite.
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
+    # Tabla de resúmenes guardados (uno por bloque, identificado por el
+    # primer id de sus segmentos). Se crea sola la primera vez.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS resumenes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            sesion_id  INTEGER,
+            ancla_id   INTEGER UNIQUE,
+            orador     TEXT,
+            resumen    TEXT,
+            creado     TEXT
+        )""")
+    # Estructura editorial de la sesión: encabezados de sección (orden
+    # del día) numerados. Se guarda como JSON, uno por sesión.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS estructura (
+            sesion_id  INTEGER PRIMARY KEY,
+            datos      TEXT,
+            creado     TEXT
+        )""")
+    # --- Módulo estenográfico colaborativo (corrección por tramos) ---
+    # Configuración por sesión: cuántos correctores y duración del bloque.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS esteno_config (
+            sesion_id       INTEGER PRIMARY KEY,
+            num_correctores INTEGER NOT NULL,
+            bloque_seg      INTEGER NOT NULL,
+            nombres         TEXT,
+            creado          TEXT,
+            actualizado     TEXT
+        )""")
+    # Un renglón por bloque de tiempo, con su asignación y estado/bloqueo.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS esteno_bloques (
+            sesion_id     INTEGER,
+            indice        INTEGER,
+            inicio_seg    REAL,
+            fin_seg       REAL,
+            slot          INTEGER,
+            estado        TEXT DEFAULT 'pendiente',
+            tomado_por    TEXT,
+            tomado_en     TEXT,
+            terminado_por TEXT,
+            terminado_en  TEXT,
+            PRIMARY KEY (sesion_id, indice)
+        )""")
+    # Ruta explícita del audio de una sesión (si el descubrimiento
+    # automático no lo encuentra, el admin la fija a mano).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS esteno_audio (
+            sesion_id INTEGER PRIMARY KEY,
+            ruta      TEXT
+        )""")
+    con.commit()
+    return con
+
+
+def generar_word(con, sid, corrector="", marcar_autores=False):
+    """Arma la versión estenográfica en Word de una sesión. Con
+    'corrector' sale acotada a los tramos que esa persona tomó o terminó
+    en el módulo estenográfico; con 'marcar_autores', completa pero con una
+    nota antes de cada tramo diciendo quién lo corrigió. Devuelve
+    (bytes del .docx, nombre de archivo sugerido). La usan revisar.py y
+    la API (api/routers/sesiones.py)."""
+    ses = con.execute("SELECT * FROM sesiones WHERE id=?",
+                      (sid,)).fetchone()
+    filas = con.execute(
+        "SELECT id, orador, texto, inicio_seg FROM participaciones "
+        "WHERE sesion_id=? ORDER BY inicio_seg", (sid,)).fetchall()
+    rangos_corrector = None
+    if corrector:
+        rangos_corrector = con.execute(
+            "SELECT inicio_seg, fin_seg FROM esteno_bloques "
+            "WHERE sesion_id=? AND (tomado_por=? OR "
+            "terminado_por=?)", (sid, corrector, corrector)
+        ).fetchall()
+        filas = [f for f in filas if any(
+            r["inicio_seg"] <= f["inicio_seg"] < r["fin_seg"]
+            for r in rangos_corrector)]
+    bloques_autor = (con.execute(
+        "SELECT inicio_seg, fin_seg, tomado_por, terminado_por "
+        "FROM esteno_bloques WHERE sesion_id=? "
+        "ORDER BY inicio_seg", (sid,)).fetchall()
+        if marcar_autores else [])
+    # Resúmenes ejecutivos guardados (si la tabla existe) — no
+    # aplican al recorte por corrector, son de la sesión completa.
+    try:
+        resumenes = ([] if corrector else con.execute(
+            "SELECT orador, resumen FROM resumenes "
+            "WHERE sesion_id=? ORDER BY ancla_id", (sid,)).fetchall())
+    except sqlite3.Error:
+        resumenes = []
+    # Estructura (encabezados del orden del día), si existe
+    estructura = {"secciones": []}
+    try:
+        fe = con.execute(
+            "SELECT datos FROM estructura WHERE sesion_id=?",
+            (sid,)).fetchone()
+        if fe and fe["datos"]:
+            estructura = json.loads(fe["datos"])
+    except (sqlite3.Error, ValueError, TypeError):
+        pass
+    # Mapa ancla_id -> título de sección para insertar encabezados.
+    titulos_seccion = {s["ancla_id"]: s["titulo"]
+                       for s in estructura.get("secciones", [])
+                       if s.get("ancla_id") is not None}
+
+    from docx.shared import Inches, Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    doc = Document()
+
+    # --- CONFIGURAR MÁRGENES ---
+    for section in doc.sections:
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(11)
+        section.top_margin = Cm(3.5)
+        section.bottom_margin = Cm(2.5)
+        section.left_margin = Cm(3)
+        section.right_margin = Cm(2.5)
+
+        # --- INSERTAR IMAGEN (MEMBRETE) ---
+        # Ruta configurable con la variable de entorno MEMBRETE_IMG;
+        # si no, se buscan varios nombres junto al script.
+        header = section.header
+        header_para = (header.paragraphs[0] if header.paragraphs
+                       else header.add_paragraph())
+        header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        ruta_membrete = _ruta_membrete()
+        if ruta_membrete:
+            try:
+                header_para.add_run().add_picture(
+                    ruta_membrete, width=Inches(7.5))
+            except Exception as e:
+                print("No se pudo insertar el membrete:", e)
+
+    # --- CONFIGURAR FUENTE ARIAL 11, JUSTIFICADO Y ESPACIADO ---
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Arial'
+    font.size = Pt(11)
+    pf = style.paragraph_format
+    pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    pf.line_spacing = 1.15
+    pf.space_after = Pt(12)
+
+    # --- AGREGAR TÍTULOS AL DOCUMENTO ---
+    titulo_texto = ("VERSIÓN ESTENOGRÁFICA: "
+                    + (ses['titulo'] if ses and ses['titulo']
+                       else 'SESIÓN LEGISLATIVA'))
+    p_titulo = doc.add_paragraph()
+    p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_titulo = p_titulo.add_run(titulo_texto.upper())
+    run_titulo.bold = True
+    run_titulo.font.size = Pt(12)
+
+    p_fecha = doc.add_paragraph(
+        "Fecha: " + _fecha_legible(ses['inicio'] if ses else None))
+    p_fecha.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_fecha.runs[0].font.size = Pt(10)
+    p_fecha.runs[0].font.italic = True
+
+    if corrector:
+        p_corr = doc.add_paragraph(
+            "Tramos corregidos por: " + corrector + "  ("
+            + ", ".join(hms(r["inicio_seg"]) + "–" + hms(r["fin_seg"])
+                        for r in rangos_corrector) + ")")
+        p_corr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_corr.runs[0].font.size = Pt(10)
+        p_corr.runs[0].font.italic = True
+
+    doc.add_paragraph("-" * 65).alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Helper: inserta un encabezado de sección (punto del orden del día).
+    def agregar_encabezado(titulo):
+        pe = doc.add_paragraph()
+        pe.paragraph_format.space_before = Pt(14)
+        pe.paragraph_format.space_after = Pt(6)
+        pe.paragraph_format.keep_with_next = True
+        pe.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        run_e = pe.add_run(titulo)
+        run_e.bold = True
+        run_e.font.size = Pt(11)
+
+    # Helper: vuelca un texto en uno o varios párrafos, respetando
+    # los saltos de línea (\n) que introdujo la corrección de la IA.
+    # El primer párrafo puede empezar con el nombre del orador en negrita.
+    def volcar_intervencion(orador, texto):
+        html_a_word(doc, texto, orador=orador,
+                    fuente_nombre="Arial", fuente_pt=11,
+                    justify=True, first_indent_cm=1)
+
+    # Agrupamos por orador consecutivo para que cada intervención
+    # sea un bloque coherente (aunque en la BD estén partida en filas).
+    orador_actual = None
+    ancla_actual = None
+    buffer_texto = []
+
+    def vaciar_buffer():
+        if orador_actual is not None and buffer_texto:
+            # Si esta intervención inicia un punto del orden del día,
+            # insertamos primero su encabezado de sección.
+            if ancla_actual in titulos_seccion:
+                agregar_encabezado(titulos_seccion[ancla_actual])
+            volcar_intervencion(orador_actual,
+                                "\n".join(buffer_texto).strip())
+
+    def agregar_marcador_autor(autor):
+        pm = doc.add_paragraph()
+        pm.paragraph_format.space_before = Pt(10)
+        pm.paragraph_format.space_after = Pt(4)
+        pm.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        run_m = pm.add_run(
+            "— Tramo corregido por: " + autor + " —" if autor
+            else "— Tramo sin corrección registrada —")
+        run_m.italic = True
+        run_m.font.size = Pt(9)
+        run_m.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+
+    # Punteros para saber, sobre la marcha, en qué bloque estenográfico
+    # cae cada fila (ambas listas vienen ordenadas por inicio_seg).
+    ptr_bloque = 0
+    idx_bloque_actual = "__ninguno__"  # distinto de None a propósito
+
+    for f in filas:
+        texto_segmento = (f['texto'] or "").strip()
+        if not texto_segmento:
+            continue
+        if marcar_autores and bloques_autor:
+            while (ptr_bloque < len(bloques_autor)
+                   and f['inicio_seg'] >= bloques_autor[ptr_bloque]['fin_seg']):
+                ptr_bloque += 1
+            en_bloque = (ptr_bloque < len(bloques_autor)
+                        and f['inicio_seg'] >= bloques_autor[ptr_bloque]['inicio_seg'])
+            nuevo_idx = ptr_bloque if en_bloque else None
+            if nuevo_idx != idx_bloque_actual:
+                vaciar_buffer()
+                orador_actual = None
+                buffer_texto = []
+                idx_bloque_actual = nuevo_idx
+                b = bloques_autor[nuevo_idx] if nuevo_idx is not None else None
+                autor = (b["terminado_por"] or b["tomado_por"]) if b else None
+                agregar_marcador_autor(autor)
+        if f['orador'] != orador_actual:
+            vaciar_buffer()
+            orador_actual = f['orador']
+            ancla_actual = f['id']
+            buffer_texto = [texto_segmento]
+        else:
+            buffer_texto.append(texto_segmento)
+    vaciar_buffer()
+
+    # --- ANEXO: RESÚMENES EJECUTIVOS (si existen) ---
+    resumenes_utiles = [r for r in resumenes
+                        if (r["resumen"] or "").strip()]
+    if resumenes_utiles:
+        doc.add_page_break()
+        p_anexo = doc.add_paragraph()
+        p_anexo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_anexo = p_anexo.add_run("ANEXO — RESÚMENES EJECUTIVOS")
+        r_anexo.bold = True
+        r_anexo.font.size = Pt(12)
+        doc.add_paragraph("-" * 65).alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for r in resumenes_utiles:
+            if r["orador"]:
+                p_ro = doc.add_paragraph()
+                p_ro.add_run((r["orador"] or "").upper()).bold = True
+            for linea in (r["resumen"] or "").replace("\r", "").split("\n"):
+                linea = linea.strip()
+                if linea:
+                    doc.add_paragraph(linea)
+
+    archivo_memoria = BytesIO()
+    doc.save(archivo_memoria)
+    datos_docx = archivo_memoria.getvalue()
+
+    nombre_archivo = f"Sesion_{sid}.docx"
+    if corrector:
+        sufijo = re.sub(r"[^A-Za-z0-9]+", "_", corrector.split("@")[0])
+        nombre_archivo = f"Sesion_{sid}_{sufijo}.docx"
+    elif marcar_autores:
+        nombre_archivo = f"Sesion_{sid}_con_autores.docx"
+    return datos_docx, nombre_archivo
+
+
 class Manejador(BaseHTTPRequestHandler):
     ruta_db = "sesiones.db"
     # Lanzador de transcripción (costura 2)
@@ -3184,72 +3482,7 @@ class Manejador(BaseHTTPRequestHandler):
         pass
 
     def _db(self):
-        # timeout: espera hasta 30 s si otro proceso (el transcriptor en
-        # vivo) está escribiendo, en vez de fallar con "database is locked".
-        con = sqlite3.connect(self.ruta_db, timeout=30)
-        con.row_factory = sqlite3.Row
-        # WAL permite leer mientras otro escribe; busy_timeout refuerza la
-        # espera a nivel del motor SQLite.
-        try:
-            con.execute("PRAGMA journal_mode=WAL")
-            con.execute("PRAGMA busy_timeout=30000")
-            con.execute("PRAGMA synchronous=NORMAL")
-        except sqlite3.OperationalError:
-            pass
-        # Tabla de resúmenes guardados (uno por bloque, identificado por el
-        # primer id de sus segmentos). Se crea sola la primera vez.
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS resumenes (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                sesion_id  INTEGER,
-                ancla_id   INTEGER UNIQUE,
-                orador     TEXT,
-                resumen    TEXT,
-                creado     TEXT
-            )""")
-        # Estructura editorial de la sesión: encabezados de sección (orden
-        # del día) numerados. Se guarda como JSON, uno por sesión.
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS estructura (
-                sesion_id  INTEGER PRIMARY KEY,
-                datos      TEXT,
-                creado     TEXT
-            )""")
-        # --- Módulo estenográfico colaborativo (corrección por tramos) ---
-        # Configuración por sesión: cuántos correctores y duración del bloque.
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS esteno_config (
-                sesion_id       INTEGER PRIMARY KEY,
-                num_correctores INTEGER NOT NULL,
-                bloque_seg      INTEGER NOT NULL,
-                nombres         TEXT,
-                creado          TEXT,
-                actualizado     TEXT
-            )""")
-        # Un renglón por bloque de tiempo, con su asignación y estado/bloqueo.
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS esteno_bloques (
-                sesion_id     INTEGER,
-                indice        INTEGER,
-                inicio_seg    REAL,
-                fin_seg       REAL,
-                slot          INTEGER,
-                estado        TEXT DEFAULT 'pendiente',
-                tomado_por    TEXT,
-                tomado_en     TEXT,
-                terminado_por TEXT,
-                terminado_en  TEXT,
-                PRIMARY KEY (sesion_id, indice)
-            )""")
-        # Ruta explícita del audio de una sesión (si el descubrimiento
-        # automático no lo encuentra, el admin la fija a mano).
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS esteno_audio (
-                sesion_id INTEGER PRIMARY KEY,
-                ruta      TEXT
-            )""")
-        con.commit()
-        return con
+        return conectar_db(self.ruta_db)
 
     def _responder(self, cuerpo, tipo="application/json; charset=utf-8",
                    codigo=200):
@@ -4175,230 +4408,16 @@ class Manejador(BaseHTTPRequestHandler):
             marcar_autores = (q.get("marcar_autores", ["0"])[0] or "") == "1"
             con = self._db()
             try:
-                ses = con.execute("SELECT * FROM sesiones WHERE id=?",
-                                  (sid,)).fetchone()
-                filas = con.execute(
-                    "SELECT id, orador, texto, inicio_seg FROM participaciones "
-                    "WHERE sesion_id=? ORDER BY inicio_seg", (sid,)).fetchall()
-                rangos_corrector = None
-                if corrector:
-                    rangos_corrector = con.execute(
-                        "SELECT inicio_seg, fin_seg FROM esteno_bloques "
-                        "WHERE sesion_id=? AND (tomado_por=? OR "
-                        "terminado_por=?)", (sid, corrector, corrector)
-                    ).fetchall()
-                    filas = [f for f in filas if any(
-                        r["inicio_seg"] <= f["inicio_seg"] < r["fin_seg"]
-                        for r in rangos_corrector)]
-                bloques_autor = (con.execute(
-                    "SELECT inicio_seg, fin_seg, tomado_por, terminado_por "
-                    "FROM esteno_bloques WHERE sesion_id=? "
-                    "ORDER BY inicio_seg", (sid,)).fetchall()
-                    if marcar_autores else [])
-                # Resúmenes ejecutivos guardados (si la tabla existe) — no
-                # aplican al recorte por corrector, son de la sesión completa.
-                try:
-                    resumenes = ([] if corrector else con.execute(
-                        "SELECT orador, resumen FROM resumenes "
-                        "WHERE sesion_id=? ORDER BY ancla_id", (sid,)).fetchall())
-                except sqlite3.Error:
-                    resumenes = []
-                # Estructura (encabezados del orden del día), si existe
-                estructura = {"secciones": []}
-                try:
-                    fe = con.execute(
-                        "SELECT datos FROM estructura WHERE sesion_id=?",
-                        (sid,)).fetchone()
-                    if fe and fe["datos"]:
-                        estructura = json.loads(fe["datos"])
-                except (sqlite3.Error, ValueError, TypeError):
-                    pass
+                datos_docx, nombre_archivo = generar_word(
+                    con, sid, corrector, marcar_autores)
             finally:
                 con.close()
-            # Mapa ancla_id -> título de sección para insertar encabezados.
-            titulos_seccion = {s["ancla_id"]: s["titulo"]
-                               for s in estructura.get("secciones", [])
-                               if s.get("ancla_id") is not None}
-
-            from docx.shared import Inches, Pt, Cm, RGBColor
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            doc = Document()
-
-            # --- CONFIGURAR MÁRGENES ---
-            for section in doc.sections:
-                section.page_width = Inches(8.5)
-                section.page_height = Inches(11)
-                section.top_margin = Cm(3.5)
-                section.bottom_margin = Cm(2.5)
-                section.left_margin = Cm(3)
-                section.right_margin = Cm(2.5)
-
-                # --- INSERTAR IMAGEN (MEMBRETE) ---
-                # Ruta configurable con la variable de entorno MEMBRETE_IMG;
-                # si no, se buscan varios nombres junto al script.
-                header = section.header
-                header_para = (header.paragraphs[0] if header.paragraphs
-                               else header.add_paragraph())
-                header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                ruta_membrete = _ruta_membrete()
-                if ruta_membrete:
-                    try:
-                        header_para.add_run().add_picture(
-                            ruta_membrete, width=Inches(7.5))
-                    except Exception as e:
-                        print("No se pudo insertar el membrete:", e)
-
-            # --- CONFIGURAR FUENTE ARIAL 11, JUSTIFICADO Y ESPACIADO ---
-            style = doc.styles['Normal']
-            font = style.font
-            font.name = 'Arial'
-            font.size = Pt(11)
-            pf = style.paragraph_format
-            pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            pf.line_spacing = 1.15
-            pf.space_after = Pt(12)
-
-            # --- AGREGAR TÍTULOS AL DOCUMENTO ---
-            titulo_texto = ("VERSIÓN ESTENOGRÁFICA: "
-                            + (ses['titulo'] if ses and ses['titulo']
-                               else 'SESIÓN LEGISLATIVA'))
-            p_titulo = doc.add_paragraph()
-            p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run_titulo = p_titulo.add_run(titulo_texto.upper())
-            run_titulo.bold = True
-            run_titulo.font.size = Pt(12)
-
-            p_fecha = doc.add_paragraph(
-                "Fecha: " + _fecha_legible(ses['inicio'] if ses else None))
-            p_fecha.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_fecha.runs[0].font.size = Pt(10)
-            p_fecha.runs[0].font.italic = True
-
-            if corrector:
-                p_corr = doc.add_paragraph(
-                    "Tramos corregidos por: " + corrector + "  ("
-                    + ", ".join(hms(r["inicio_seg"]) + "–" + hms(r["fin_seg"])
-                                for r in rangos_corrector) + ")")
-                p_corr.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p_corr.runs[0].font.size = Pt(10)
-                p_corr.runs[0].font.italic = True
-
-            doc.add_paragraph("-" * 65).alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
-            # Helper: inserta un encabezado de sección (punto del orden del día).
-            def agregar_encabezado(titulo):
-                pe = doc.add_paragraph()
-                pe.paragraph_format.space_before = Pt(14)
-                pe.paragraph_format.space_after = Pt(6)
-                pe.paragraph_format.keep_with_next = True
-                pe.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                run_e = pe.add_run(titulo)
-                run_e.bold = True
-                run_e.font.size = Pt(11)
-
-            # Helper: vuelca un texto en uno o varios párrafos, respetando
-            # los saltos de línea (\n) que introdujo la corrección de la IA.
-            # El primer párrafo puede empezar con el nombre del orador en negrita.
-            def volcar_intervencion(orador, texto):
-                html_a_word(doc, texto, orador=orador,
-                            fuente_nombre="Arial", fuente_pt=11,
-                            justify=True, first_indent_cm=1)
-
-            # Agrupamos por orador consecutivo para que cada intervención
-            # sea un bloque coherente (aunque en la BD estén partida en filas).
-            orador_actual = None
-            ancla_actual = None
-            buffer_texto = []
-
-            def vaciar_buffer():
-                if orador_actual is not None and buffer_texto:
-                    # Si esta intervención inicia un punto del orden del día,
-                    # insertamos primero su encabezado de sección.
-                    if ancla_actual in titulos_seccion:
-                        agregar_encabezado(titulos_seccion[ancla_actual])
-                    volcar_intervencion(orador_actual,
-                                        "\n".join(buffer_texto).strip())
-
-            def agregar_marcador_autor(autor):
-                pm = doc.add_paragraph()
-                pm.paragraph_format.space_before = Pt(10)
-                pm.paragraph_format.space_after = Pt(4)
-                pm.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                run_m = pm.add_run(
-                    "— Tramo corregido por: " + autor + " —" if autor
-                    else "— Tramo sin corrección registrada —")
-                run_m.italic = True
-                run_m.font.size = Pt(9)
-                run_m.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
-
-            # Punteros para saber, sobre la marcha, en qué bloque estenográfico
-            # cae cada fila (ambas listas vienen ordenadas por inicio_seg).
-            ptr_bloque = 0
-            idx_bloque_actual = "__ninguno__"  # distinto de None a propósito
-
-            for f in filas:
-                texto_segmento = (f['texto'] or "").strip()
-                if not texto_segmento:
-                    continue
-                if marcar_autores and bloques_autor:
-                    while (ptr_bloque < len(bloques_autor)
-                           and f['inicio_seg'] >= bloques_autor[ptr_bloque]['fin_seg']):
-                        ptr_bloque += 1
-                    en_bloque = (ptr_bloque < len(bloques_autor)
-                                and f['inicio_seg'] >= bloques_autor[ptr_bloque]['inicio_seg'])
-                    nuevo_idx = ptr_bloque if en_bloque else None
-                    if nuevo_idx != idx_bloque_actual:
-                        vaciar_buffer()
-                        orador_actual = None
-                        buffer_texto = []
-                        idx_bloque_actual = nuevo_idx
-                        b = bloques_autor[nuevo_idx] if nuevo_idx is not None else None
-                        autor = (b["terminado_por"] or b["tomado_por"]) if b else None
-                        agregar_marcador_autor(autor)
-                if f['orador'] != orador_actual:
-                    vaciar_buffer()
-                    orador_actual = f['orador']
-                    ancla_actual = f['id']
-                    buffer_texto = [texto_segmento]
-                else:
-                    buffer_texto.append(texto_segmento)
-            vaciar_buffer()
-
-            # --- ANEXO: RESÚMENES EJECUTIVOS (si existen) ---
-            resumenes_utiles = [r for r in resumenes
-                                if (r["resumen"] or "").strip()]
-            if resumenes_utiles:
-                doc.add_page_break()
-                p_anexo = doc.add_paragraph()
-                p_anexo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                r_anexo = p_anexo.add_run("ANEXO — RESÚMENES EJECUTIVOS")
-                r_anexo.bold = True
-                r_anexo.font.size = Pt(12)
-                doc.add_paragraph("-" * 65).alignment = WD_ALIGN_PARAGRAPH.CENTER
-                for r in resumenes_utiles:
-                    if r["orador"]:
-                        p_ro = doc.add_paragraph()
-                        p_ro.add_run((r["orador"] or "").upper()).bold = True
-                    for linea in (r["resumen"] or "").replace("\r", "").split("\n"):
-                        linea = linea.strip()
-                        if linea:
-                            doc.add_paragraph(linea)
-
-            archivo_memoria = BytesIO()
-            doc.save(archivo_memoria)
-            datos_docx = archivo_memoria.getvalue()
 
             self.send_response(200)
             self.send_header(
                 "Content-Type",
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document")
-            nombre_archivo = f"Sesion_{sid}.docx"
-            if corrector:
-                sufijo = re.sub(r"[^A-Za-z0-9]+", "_", corrector.split("@")[0])
-                nombre_archivo = f"Sesion_{sid}_{sufijo}.docx"
-            elif marcar_autores:
-                nombre_archivo = f"Sesion_{sid}_con_autores.docx"
             self.send_header(
                 "Content-Disposition",
                 f"attachment; filename={nombre_archivo}")
