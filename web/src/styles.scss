@@ -428,3 +428,114 @@ code.credencial {
   html { scroll-behavior: auto; }
   .chip--vivo .chip__punto, .skeleton { animation: none; }
 }
+
+/* ---------- Lista de sesiones agrupada por día (Sesiones y Estenográfico) ---------- */
+.grupo-dia {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+
+  &__titulo {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin: 0;
+    padding-left: 0.25rem;
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: var(--brand-ink);
+
+    span { font-size: 0.78rem; font-weight: 600; color: var(--brand-muted); }
+  }
+}
+
+.lista-filas {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.fila-sesion {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1.25rem;
+  transition: background 0.15s;
+
+  & + & { border-top: 1px solid var(--brand-border); }
+  &:hover { background: #fdf8fa; }
+  &--vacia { opacity: 0.6; }
+
+  &__principal {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  &__num {
+    display: grid;
+    place-items: center;
+    min-width: 52px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--brand-primary-soft);
+    color: var(--brand-primary);
+    font-size: 0.85rem;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  &__datos { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+
+  &__titulo {
+    font-size: 0.93rem;
+    font-weight: 700;
+    line-height: 1.35;
+    color: var(--brand-ink);
+  }
+
+  &:hover &__titulo { color: var(--brand-primary); }
+
+  &__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.79rem;
+    color: var(--brand-muted);
+    font-variant-numeric: tabular-nums;
+
+    .chip { padding: 0.1rem 0.55rem; font-size: 0.7rem; }
+  }
+
+  &__acciones { display: flex; gap: 0.45rem; flex-shrink: 0; }
+
+  &__flecha { width: 18px; height: 18px; color: #b8bcbf; flex-shrink: 0; }
+}
+
+.btn--icono {
+  padding: 0.45rem 0.6rem;
+}
+
+.btn--eliminar {
+  background: #fff;
+  color: var(--brand-danger);
+  border: 1.5px solid rgba(179, 38, 30, 0.25);
+
+  &:hover:not(:disabled) { background: var(--brand-danger); color: #fff; border-color: var(--brand-danger); }
+}
+
+@media (max-width: 860px) {
+  .fila-sesion {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+
+    &__acciones .btn:first-child { flex: 1; }
+  }
+}

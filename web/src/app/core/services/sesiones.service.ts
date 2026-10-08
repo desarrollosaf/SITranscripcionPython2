@@ -19,6 +19,11 @@ export class SesionesService {
     return this.http.get<DetalleSesion>(`${this.base}/sesiones/${id}/participaciones`);
   }
 
+  /** Borra la sesión con todo su texto, resúmenes y plan estenográfico. */
+  eliminar(id: number): Observable<{ ok: boolean; segmentos: number }> {
+    return this.http.delete<{ ok: boolean; segmentos: number }>(`${this.base}/sesiones/${id}`);
+  }
+
   catalogo(): Observable<string[]> {
     return this.http.get<string[]>(`${this.base}/catalogo`);
   }

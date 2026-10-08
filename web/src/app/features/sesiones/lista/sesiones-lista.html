@@ -17,50 +17,13 @@
     </div>
   </header>
 
-  <!-- Filtros -->
-  <div class="tarjeta filtros">
-    <div class="filtros__fila">
-      <label class="buscador buscador--ancho">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-        <input type="search" placeholder="Buscar por número, comisión o tema…" aria-label="Buscar sesión"
-               [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
-      </label>
-      <label class="campo campo--fecha">
-        <span class="campo__label">Desde</span>
-        <input type="date" [value]="desde()" [max]="hasta() || null" (change)="cambiarFecha('desde', $any($event.target).value)" />
-      </label>
-      <label class="campo campo--fecha">
-        <span class="campo__label">Hasta</span>
-        <input type="date" [value]="hasta()" [min]="desde() || null" (change)="cambiarFecha('hasta', $any($event.target).value)" />
-      </label>
-    </div>
-    <div class="filtros__fila filtros__fila--secundaria">
-      <div class="rapidos" role="group" aria-label="Rango de fechas">
-        @for (r of rangos; track r.valor) {
-          <button type="button" class="rapido" [class.rapido--activo]="rango() === r.valor" (click)="elegirRango(r.valor)">{{ r.texto }}</button>
-        }
-      </div>
-      @if (vacias()) {
-        <label class="casilla">
-          <input type="checkbox" [checked]="ocultarVacias()" (change)="ocultarVacias.set($any($event.target).checked)" />
-          Ocultar sesiones sin texto ({{ vacias() }})
-        </label>
-      }
-      <span class="filtros__total">
-        <strong>{{ filtradas().length }}</strong> de {{ sesiones().length }} sesiones
-        @if (hayFiltros()) {
-          · <button type="button" class="enlace" (click)="limpiar()">Quitar filtros</button>
-        }
-      </span>
-    </div>
-  </div>
+  <app-filtros-sesiones [filtro]="filtro" />
 
-  <!-- Lista -->
   @if (cargando()) {
     <div class="tarjeta">
-      @for (n of [1, 2, 3, 4, 5]; track n) { <div class="skeleton fila-skeleton"></div> }
+      @for (n of [1, 2, 3, 4, 5]; track n) { <div class="skeleton" style="height: 64px; margin-bottom: 0.6rem"></div> }
     </div>
-  } @else if (sesiones().length === 0) {
+  } @else if (filtro.sesiones().length === 0) {
     <div class="tarjeta vacio">
       <span class="vacio__icono">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
@@ -69,27 +32,27 @@
       <span>Cuando lances una transcripción, la sesión aparecerá aquí.</span>
       <a class="btn btn--primary btn--sm" routerLink="/transcribir">Lanzar una transcripción</a>
     </div>
-  } @else if (filtradas().length === 0) {
+  } @else if (filtro.filtradas().length === 0) {
     <div class="tarjeta vacio">
       <strong>Ninguna sesión coincide</strong>
       <span>Prueba con otras fechas o con otra búsqueda.</span>
-      <button type="button" class="btn btn--outline btn--sm" (click)="limpiar()">Quitar filtros</button>
+      <button type="button" class="btn btn--outline btn--sm" (click)="filtro.limpiar()">Quitar filtros</button>
     </div>
   } @else {
-    @for (g of grupos(); track g.dia) {
-      <div class="grupo">
-        <h2 class="grupo__titulo">
+    @for (g of filtro.grupos(); track g.dia) {
+      <div class="grupo-dia">
+        <h2 class="grupo-dia__titulo">
           {{ g.titulo }}
           <span>{{ g.sesiones.length }} {{ g.sesiones.length === 1 ? 'sesión' : 'sesiones' }}</span>
         </h2>
-        <ul class="lista tarjeta">
+        <ul class="lista-filas tarjeta" style="padding: 0">
           @for (s of g.sesiones; track s.id) {
-            <li class="fila" [class.fila--vacia]="!s.segmentos">
-              <a class="fila__principal" [routerLink]="['/sesiones', s.id]">
-                <span class="fila__num">#{{ s.id }}</span>
-                <span class="fila__datos">
-                  <span class="fila__titulo">{{ s.titulo || 'Sesión ' + s.id }}</span>
-                  <span class="fila__meta">
+            <li class="fila-sesion" [class.fila-sesion--vacia]="!s.segmentos">
+              <a class="fila-sesion__principal" [routerLink]="['/sesiones', s.id]">
+                <span class="fila-sesion__num">#{{ s.id }}</span>
+                <span class="fila-sesion__datos">
+                  <span class="fila-sesion__titulo">{{ s.titulo || 'Sesión ' + s.id }}</span>
+                  <span class="fila-sesion__meta">
                     <span>{{ hora(s) }}</span>
                     <span>·</span>
                     @if (s.segmentos) {
@@ -107,7 +70,7 @@
                   </span>
                 </span>
               </a>
-              <div class="fila__acciones">
+              <div class="fila-sesion__acciones">
                 <a class="btn btn--primary btn--sm" [routerLink]="['/sesiones', s.id]">Revisar</a>
                 <a class="btn btn--outline btn--sm" [routerLink]="['/esteno', s.id]" title="Módulo estenográfico">Correctores</a>
                 <button type="button" class="btn btn--outline btn--sm" title="Descargar Word" [disabled]="descargando() === s.id || !s.segmentos" (click)="descargarWord(s)">
@@ -117,6 +80,14 @@
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   }
                   Word
+                </button>
+                <button type="button" class="btn btn--eliminar btn--sm btn--icono" title="Eliminar sesión" aria-label="Eliminar sesión"
+                        [disabled]="eliminando() === s.id" (click)="eliminar(s)">
+                  @if (eliminando() === s.id) {
+                    <span class="spinner spinner--oscuro"></span>
+                  } @else {
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-1 12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1L6 7h12Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
+                  }
                 </button>
               </div>
             </li>

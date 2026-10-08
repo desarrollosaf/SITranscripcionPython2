@@ -21,6 +21,40 @@ export async function confirmar(opciones: {
   return r.isConfirmed;
 }
 
+/**
+ * Confirmación para algo que no se puede deshacer: hay que escribir
+ * `palabra` para que se habilite el botón.
+ */
+export async function confirmarEscribiendo(opciones: {
+  titulo: string;
+  html: string;
+  palabra: string;
+  confirmar: string;
+}): Promise<boolean> {
+  const r = await Swal.fire({
+    title: opciones.titulo,
+    html: opciones.html,
+    icon: 'warning',
+    input: 'text',
+    inputPlaceholder: opciones.palabra,
+    inputAttributes: { autocomplete: 'off', autocapitalize: 'off' },
+    showCancelButton: true,
+    reverseButtons: true,
+    confirmButtonText: opciones.confirmar,
+    cancelButtonText: 'Cancelar',
+    confirmButtonColor: '#b3261e',
+    cancelButtonColor: '#767679',
+    preConfirm: (valor: string) => {
+      if ((valor || '').trim() !== opciones.palabra) {
+        Swal.showValidationMessage(`Escribe «${opciones.palabra}» para confirmar`);
+        return false;
+      }
+      return true;
+    },
+  });
+  return r.isConfirmed;
+}
+
 /** Muestra una credencial recién creada, que no se vuelve a poder ver. */
 export function mostrarCredencial(email: string, password: string, titulo = 'Cuenta creada'): void {
   void Swal.fire({

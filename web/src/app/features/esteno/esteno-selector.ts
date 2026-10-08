@@ -1,17 +1,21 @@
-import { Component, computed, signal } from '@angular/core';
+import { Component, Signal, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { Sesion } from '../../core/models';
 import { mensajeDeError } from '../../core/interceptors/auth.interceptor';
 import { AuthService } from '../../core/services/auth.service';
 import { SesionesService } from '../../core/services/sesiones.service';
 import { ToastService } from '../../core/services/toast.service';
-import { duracionLegible, fechaCorta, normalizar } from '../../shared/utils/texto';
+import {
+  FiltroSesiones,
+  FiltrosSesiones,
+  horaDe,
+} from '../../shared/filtro-sesiones/filtro-sesiones';
+import { duracionLegible } from '../../shared/utils/texto';
 
 /** Entrada al módulo estenográfico: elegir qué sesión preparar o corregir. */
 @Component({
   selector: 'app-esteno-selector',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, FiltrosSesiones],
   template: `
     <section class="pagina">
       <header class="pagina__header">
@@ -27,107 +31,75 @@ import { duracionLegible, fechaCorta, normalizar } from '../../shared/utils/text
             }
           </p>
         </div>
-        <label class="buscador">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-          <input type="search" placeholder="Buscar sesión…" [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
-        </label>
       </header>
 
+      <app-filtros-sesiones [filtro]="filtro" />
+
       @if (cargando()) {
-        <div class="grid">
-          @for (n of [1, 2, 3, 4]; track n) { <div class="skeleton" style="height: 120px"></div> }
+        <div class="tarjeta">
+          @for (n of [1, 2, 3, 4]; track n) { <div class="skeleton" style="height: 64px; margin-bottom: 0.6rem"></div> }
         </div>
-      } @else if (filtradas().length === 0) {
+      } @else if (filtro.filtradas().length === 0) {
         <div class="tarjeta vacio">
           <span class="vacio__icono"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8.5" r="3" stroke="currentColor" stroke-width="1.7" /><path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg></span>
-          <strong>{{ sesiones().length ? 'Sin resultados' : 'Aún no hay sesiones' }}</strong>
-          <span>Cuando haya una sesión en curso o terminada, aparecerá aquí.</span>
+          <strong>{{ filtro.sesiones().length ? 'Ninguna sesión coincide' : 'Aún no hay sesiones' }}</strong>
+          @if (filtro.sesiones().length) {
+            <button type="button" class="btn btn--outline btn--sm" (click)="filtro.limpiar()">Quitar filtros</button>
+          } @else {
+            <span>Cuando haya una sesión en curso o terminada, aparecerá aquí.</span>
+          }
         </div>
       } @else {
-        <ul class="grid">
-          @for (s of filtradas(); track s.id) {
-            <li>
-              <a class="sesion" [routerLink]="['/esteno', s.id]">
-                <span class="sesion__num">#{{ s.id }}</span>
-                <span class="sesion__datos">
-                  <strong>{{ s.titulo || 'Sesión ' + s.id }}</strong>
-                  <small>{{ fecha(s.inicio) }} · {{ duracion(s.duracion_seg) }}</small>
-                </span>
-                <svg class="sesion__flecha" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              </a>
-            </li>
-          }
-        </ul>
+        @for (g of filtro.grupos(); track g.dia) {
+          <div class="grupo-dia">
+            <h2 class="grupo-dia__titulo">
+              {{ g.titulo }}
+              <span>{{ g.sesiones.length }} {{ g.sesiones.length === 1 ? 'sesión' : 'sesiones' }}</span>
+            </h2>
+            <ul class="lista-filas tarjeta" style="padding: 0">
+              @for (s of g.sesiones; track s.id) {
+                <li>
+                  <a class="fila-sesion" [class.fila-sesion--vacia]="!s.segmentos" [routerLink]="['/esteno', s.id]" style="color: inherit; text-decoration: none">
+                    <span class="fila-sesion__principal">
+                      <span class="fila-sesion__num">#{{ s.id }}</span>
+                      <span class="fila-sesion__datos">
+                        <span class="fila-sesion__titulo">{{ s.titulo || 'Sesión ' + s.id }}</span>
+                        <span class="fila-sesion__meta">
+                          <span>{{ hora(s) }}</span>
+                          <span>·</span>
+                          <span>{{ s.segmentos ? duracion(s.duracion_seg) + ' de audio' : 'Sin texto' }}</span>
+                        </span>
+                      </span>
+                    </span>
+                    <span class="btn btn--outline btn--sm">{{ esAdmin() ? 'Plan y avance' : 'Corregir' }}</span>
+                    <svg class="fila-sesion__flecha" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </a>
+                </li>
+              }
+            </ul>
+          </div>
+        }
       }
     </section>
   `,
   styles: `
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 0.85rem;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-    .sesion {
-      display: flex;
-      align-items: center;
-      gap: 0.9rem;
-      padding: 1rem 1.1rem;
-      border: 1px solid var(--brand-border);
-      border-radius: 14px;
-      background: #fff;
-      color: inherit;
-      text-decoration: none;
-      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
-      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-    }
-    .sesion:hover {
-      transform: translateY(-2px);
-      border-color: rgba(150, 0, 72, 0.3);
-      box-shadow: 0 14px 30px rgba(0, 0, 0, 0.08);
-    }
-    .sesion__num {
-      display: grid;
-      place-items: center;
-      min-width: 48px;
-      height: 48px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-dark));
-      color: #fff;
-      font-size: 0.85rem;
-      font-weight: 800;
-    }
-    .sesion__datos { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-    .sesion__datos strong {
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      font-size: 0.92rem; color: var(--brand-ink);
-    }
-    .sesion__datos small { font-size: 0.78rem; color: var(--brand-muted); }
-    .sesion__flecha { width: 18px; height: 18px; color: #b8bcbf; }
+    li + li .fila-sesion { border-top: 1px solid var(--brand-border); }
   `,
 })
 export class EstenoSelector {
-  protected readonly sesiones = signal<Sesion[]>([]);
+  protected readonly filtro = new FiltroSesiones();
   protected readonly cargando = signal(true);
-  protected readonly busqueda = signal('');
-  protected readonly esAdmin;
-  protected readonly fecha = fechaCorta;
+  protected readonly esAdmin: Signal<boolean>;
   protected readonly duracion = duracionLegible;
-
-  protected readonly filtradas = computed(() => {
-    const q = normalizar(this.busqueda().trim());
-    return q
-      ? this.sesiones().filter((s) => normalizar(`#${s.id} ${s.titulo ?? ''}`).includes(q))
-      : this.sesiones();
-  });
+  protected readonly hora = horaDe;
 
   constructor(sesionesService: SesionesService, toast: ToastService, auth: AuthService) {
     this.esAdmin = auth.esAdmin;
+    // Al corrector no le sirven las sesiones vacías: no tienen nada que corregir.
+    if (!this.esAdmin()) this.filtro.ocultarVacias.set(true);
     sesionesService.listar().subscribe({
       next: (s) => {
-        this.sesiones.set(s);
+        this.filtro.cargar(s);
         this.cargando.set(false);
       },
       error: (e) => {

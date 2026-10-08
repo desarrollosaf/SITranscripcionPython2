@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 import revisar
 
 from .. import revision
+from ..db_mysql import conexion as conexion_mysql
 from ..revision import db
 from ..security import usuario_actual, usuario_actual_o_query, usuario_admin_actual
 
@@ -95,6 +96,34 @@ def listar_sesiones(_usuario=Depends(usuario_actual)):
             "(SELECT MAX(fin_seg) FROM participaciones p "
             " WHERE p.sesion_id = s.id) AS duracion_seg "
             "FROM sesiones s ORDER BY s.id DESC")]
+
+
+@router.delete("/sesiones/{sid}")
+def eliminar_sesion(sid: int, _admin=Depends(usuario_admin_actual)):
+    """Borra la sesión con todo su contenido (texto, resúmenes, orden del
+    día, plan estenográfico). Los archivos de audio no se tocan. No se puede
+    borrar mientras algo sigue escribiendo en ella."""
+    if revision.sesion_en_vivo(sid):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "La sesión se está transcribiendo; detén la "
+                            "transcripción antes de eliminarla.")
+    with db() as con:
+        _sesion_o_404(con, sid)
+        borrados = con.execute("DELETE FROM participaciones WHERE sesion_id=?",
+                               (sid,)).rowcount
+        for tabla in ("resumenes", "estructura", "esteno_config",
+                      "esteno_bloques", "esteno_audio"):
+            con.execute(f"DELETE FROM {tabla} WHERE sesion_id=?", (sid,))
+        con.execute("DELETE FROM sesiones WHERE id=?", (sid,))
+        con.commit()
+    # Los trabajos de la API que la escribían quedan sin sesión (ya no se
+    # pueden reanudar sobre algo que no existe).
+    try:
+        with conexion_mysql() as cm, cm.cursor() as cur:
+            cur.execute("UPDATE trabajos SET sesion_id=NULL WHERE sesion_id=%s", (sid,))
+    except Exception:
+        pass
+    return {"ok": True, "segmentos": borrados}
 
 
 @router.get("/sesiones/{sid}/participaciones")

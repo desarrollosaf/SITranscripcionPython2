@@ -8,6 +8,7 @@ Uso (dentro de Docker):
 import argparse
 from datetime import datetime
 
+import db_sesiones
 from api.config import settings
 from api.revision import db
 from revisar import hms
@@ -80,8 +81,8 @@ def main():
                      hms(t + dur), frase))
                 t += dur + 0.5
         con.commit()
-    print(f"Sesión de demostración #{sid} creada en {settings.db_path} "
-          f"({hms(t)} de duración).")
+    donde = "MySQL" if db_sesiones.usa_mysql() else settings.db_path
+    print(f"Sesión de demostración #{sid} creada en {donde} ({hms(t)} de duración).")
 
 
 if __name__ == "__main__":
