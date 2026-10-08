@@ -114,11 +114,22 @@ export function enlaceVideo(url: string | null | undefined, segundos: number): s
   return `${url}${url.includes('?') ? '&' : '?'}t=${Math.floor(segundos)}s`;
 }
 
-/** "2026-10-08T14:37:01" → "8 oct 2026, 14:37". */
+/**
+ * Fecha guardada por el transcriptor. Viene sin zona horaria pero es UTC (la
+ * hora del contenedor), así que se interpreta como UTC y se muestra en local.
+ */
+export function leerFecha(valor: string | null | undefined): Date | null {
+  if (!valor) return null;
+  let texto = valor.trim().replace(' ', 'T');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(texto)) texto += 'Z';
+  const d = new Date(texto);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** "2026-10-08T20:37:01" (UTC) → "8 oct 2026, 02:37 p.m." (hora local). */
 export function fechaCorta(valor: string | null | undefined): string {
-  if (!valor) return '—';
-  const d = new Date(valor.replace(' ', 'T'));
-  if (isNaN(d.getTime())) return valor;
+  const d = leerFecha(valor);
+  if (!d) return valor || '—';
   return d.toLocaleString('es-MX', {
     day: 'numeric',
     month: 'short',
@@ -126,4 +137,9 @@ export function fechaCorta(valor: string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** Día local en formato AAAA-MM-DD (el que usa <input type="date">). */
+export function diaLocal(d: Date): string {
+  return d.toLocaleDateString('en-CA');
 }

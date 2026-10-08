@@ -59,6 +59,10 @@ def inicializar_esquema():
             "passphrase": "VARCHAR(64) NULL",
             "evento_id": "VARCHAR(64) NULL",
         })
+        # Nombre para mostrar (el login sigue siendo el email).
+        _agregar_columnas_si_faltan(cur, "usuarios", {
+            "nombre": "VARCHAR(150) NULL",
+        })
 
 
 def _agregar_columnas_si_faltan(cur, tabla, columnas):

@@ -62,9 +62,9 @@
           }
           @if (user(); as u) {
             <span class="topbar__usuario">
-              <span class="topbar__avatar" aria-hidden="true">{{ u.email.charAt(0).toUpperCase() }}</span>
+              <span class="topbar__avatar" aria-hidden="true">{{ (u.nombre || u.email).charAt(0).toUpperCase() }}</span>
               <span class="topbar__datos">
-                <span class="topbar__email">{{ u.email }}</span>
+                <span class="topbar__email" [title]="u.email">{{ u.nombre || u.email }}</span>
                 <span class="topbar__rol">{{ u.es_admin ? 'Administrador' : 'Corrector' }}</span>
               </span>
             </span>

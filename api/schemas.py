@@ -13,6 +13,7 @@ class UsuarioOut(BaseModel):
     id: int
     email: str
     es_admin: bool
+    nombre: Optional[str] = None
 
 
 class UsuarioGenerar(BaseModel):
@@ -20,6 +21,7 @@ class UsuarioGenerar(BaseModel):
     # "operador1@congreso.local", que es justo lo que se usa para estas cuentas.
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
     es_admin: bool = False
+    nombre: Optional[str] = Field(None, max_length=150)
 
     @field_validator("email")
     @classmethod
@@ -29,6 +31,13 @@ class UsuarioGenerar(BaseModel):
 
 class UsuarioConPassword(UsuarioOut):
     password: str
+
+
+class UsuarioEditar(BaseModel):
+    # El email no se edita: el módulo estenográfico guarda quién tomó y
+    # terminó cada bloque por email, y cambiarlo rompería ese historial.
+    nombre: Optional[str] = Field(None, max_length=150)
+    es_admin: bool
 
 
 class Token(BaseModel):

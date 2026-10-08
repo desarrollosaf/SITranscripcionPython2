@@ -22,13 +22,13 @@ export async function confirmar(opciones: {
 }
 
 /** Muestra una credencial recién creada, que no se vuelve a poder ver. */
-export function mostrarCredencial(email: string, password: string): void {
+export function mostrarCredencial(email: string, password: string, titulo = 'Cuenta creada'): void {
   void Swal.fire({
-    title: 'Cuenta creada',
+    title: titulo,
     icon: 'success',
     html:
       '<p style="margin:0 0 .8rem;font-size:.9rem;color:#767679">Copia esta contraseña ahora: ' +
-      'no se vuelve a mostrar (si se pierde, solo se puede crear otra cuenta).</p>' +
+      'no se vuelve a mostrar. Si se pierde, genera otra con el botón «Contraseña».</p>' +
       `<p style="margin:.3rem 0">Usuario: <code class="credencial">${escapar(email)}</code></p>` +
       `<p style="margin:.3rem 0">Contraseña: <code class="credencial">${escapar(password)}</code></p>`,
     confirmButtonText: 'Ya la copié',

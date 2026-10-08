@@ -71,7 +71,7 @@
                 <select [ngModel]="asignados[i] ?? ''" (ngModelChange)="asignados[i] = $event">
                   <option value="">— sin asignar —</option>
                   @for (u of usuarios(); track u.id) {
-                    <option [value]="u.email">{{ u.email }}{{ u.es_admin ? ' (admin)' : '' }}</option>
+                    <option [value]="u.email">{{ u.nombre ? u.nombre + ' — ' + u.email : u.email }}{{ u.es_admin ? ' (admin)' : '' }}</option>
                   }
                 </select>
               </label>

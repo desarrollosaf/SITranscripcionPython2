@@ -5,7 +5,7 @@
       <h1>Usuarios</h1>
       <p>
         Cuentas para entrar a esta interfaz, al módulo estenográfico (correctores) y al agente de
-        captura de audio. La contraseña se genera sola y se muestra una sola vez.
+        captura de audio. Las contraseñas se generan solas y se muestran una sola vez.
       </p>
     </div>
   </header>
@@ -18,50 +18,94 @@
       </div>
     </div>
     <form class="campos" (ngSubmit)="crear()">
+      <label class="campo campo--nombre">
+        <span class="campo__label">Nombre</span>
+        <input type="text" name="nombre" [(ngModel)]="nombre" placeholder="Ej. María Fernanda Ruiz" maxlength="150" />
+      </label>
       <label class="campo campo--email">
-        <span class="campo__label">Email (será el usuario para iniciar sesión)</span>
-        <input type="email" name="email" [(ngModel)]="email" placeholder="corrector1@congreso.local" required />
+        <span class="campo__label">Email (usuario para iniciar sesión)</span>
+        <input type="email" name="email" [(ngModel)]="email" placeholder="corrector1@congresoedomex.gob.mx" required />
       </label>
       <label class="casilla">
         <input type="checkbox" name="esAdmin" [(ngModel)]="esAdmin" />
         Es administrador
       </label>
       <button type="submit" class="btn btn--primary" [disabled]="!email.trim() || guardando()">
-        @if (guardando()) { <span class="spinner"></span> Creando… } @else { Crear cuenta }
+        @if (guardando() && !editando()) { <span class="spinner"></span> Creando… } @else { Crear cuenta }
       </button>
     </form>
-    @if (esAdmin) {
-      <p class="advertencia">Un administrador puede lanzar transcripciones, editar sesiones y crear otras cuentas.</p>
-    }
   </div>
 
   <div class="tarjeta">
     <div class="tarjeta__titulo">
       <div>
         <h2>{{ usuarios().length }} cuentas</h2>
-        <p>{{ admins() }} administradores · {{ usuarios().length - admins() }} correctores / operadores</p>
+        <p>
+          {{ admins() }} administradores · {{ usuarios().length - admins() }} correctores / operadores
+          @if (sinNombre()) { · <strong>{{ sinNombre() }} sin nombre</strong> }
+        </p>
       </div>
-      <label class="buscador">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-        <input type="search" placeholder="Buscar por email…" [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
-      </label>
+      <div class="herramientas">
+        <div class="rapidos" role="group" aria-label="Filtrar por rol">
+          <button type="button" class="rapido" [class.rapido--activo]="filtroRol() === 'todos'" (click)="filtroRol.set('todos')">Todos</button>
+          <button type="button" class="rapido" [class.rapido--activo]="filtroRol() === 'admin'" (click)="filtroRol.set('admin')">Administradores</button>
+          <button type="button" class="rapido" [class.rapido--activo]="filtroRol() === 'corrector'" (click)="filtroRol.set('corrector')">Correctores</button>
+        </div>
+        <label class="buscador">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+          <input type="search" placeholder="Buscar por nombre o email…" [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
+        </label>
+      </div>
     </div>
 
     @if (cargando()) {
-      @for (n of [1, 2, 3]; track n) { <div class="skeleton" style="height: 58px; margin-bottom: 0.5rem"></div> }
+      @for (n of [1, 2, 3, 4]; track n) { <div class="skeleton" style="height: 64px; margin-bottom: 0.5rem"></div> }
     } @else {
-      <ul class="usuarios">
+      <ul class="lista">
         @for (u of filtrados(); track u.id) {
-          <li class="usuario">
-            <span class="usuario__avatar" [class.usuario__avatar--admin]="u.es_admin">{{ inicial(u.email) }}</span>
-            <span class="usuario__email">
-              {{ u.email }}
-              @if (u.id === yo()?.id) { <small>(tú)</small> }
-            </span>
-            @if (u.es_admin) {
-              <span class="chip chip--primario">Administrador</span>
+          <li class="fila" [class.fila--editando]="editando() === u.id">
+            <span class="avatar" [class.avatar--admin]="u.es_admin">{{ iniciales(u) }}</span>
+
+            @if (editando() === u.id) {
+              <div class="edicion">
+                <label class="campo">
+                  <span class="campo__label">Nombre</span>
+                  <input type="text" [(ngModel)]="editNombre" maxlength="150" placeholder="Nombre completo"
+                         (keydown.enter)="guardar(u)" (keydown.escape)="editando.set(null)" autofocus />
+                </label>
+                <span class="edicion__email">{{ u.email }}</span>
+                <label class="casilla">
+                  <input type="checkbox" [(ngModel)]="editAdmin" [disabled]="u.id === yo()?.id" />
+                  Administrador
+                </label>
+              </div>
+              <div class="fila__acciones">
+                <button type="button" class="btn btn--primary btn--sm" [disabled]="guardando()" (click)="guardar(u)">Guardar</button>
+                <button type="button" class="btn btn--outline btn--sm" (click)="editando.set(null)">Cancelar</button>
+              </div>
             } @else {
-              <span class="chip chip--info">Corrector / operador</span>
+              <div class="fila__datos">
+                <span class="fila__nombre">
+                  @if (u.nombre) { {{ u.nombre }} } @else { <em>Sin nombre</em> }
+                  @if (u.id === yo()?.id) { <small>(tú)</small> }
+                </span>
+                <span class="fila__email">{{ u.email }}</span>
+              </div>
+              @if (u.es_admin) {
+                <span class="chip chip--primario">Administrador</span>
+              } @else {
+                <span class="chip chip--info">Corrector / operador</span>
+              }
+              <div class="fila__acciones">
+                <button type="button" class="btn btn--outline btn--sm" (click)="editar(u)">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
+                  Editar
+                </button>
+                <button type="button" class="btn btn--outline btn--sm" (click)="restablecer(u)" title="Generar una contraseña nueva">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.7" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="currentColor" stroke-width="1.7" /></svg>
+                  Contraseña
+                </button>
+              </div>
             }
           </li>
         } @empty {

@@ -4,6 +4,7 @@ export interface Usuario {
   id: number;
   email: string;
   es_admin: boolean;
+  nombre: string | null;
 }
 
 export interface UsuarioConPassword extends Usuario {

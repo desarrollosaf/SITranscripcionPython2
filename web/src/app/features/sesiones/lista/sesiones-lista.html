@@ -3,7 +3,7 @@
     <div>
       <span class="pagina__eyebrow">Revisión</span>
       <h1>Sesiones</h1>
-      <p>Elige una sesión para revisar oradores y texto, repartirla entre correctores o descargar su versión estenográfica.</p>
+      <p>Busca una sesión por fecha o por nombre para revisarla, repartirla entre correctores o descargar su versión estenográfica.</p>
     </div>
     <div class="pagina__acciones">
       <button type="button" class="btn btn--outline" (click)="cargar()" [disabled]="cargando()">
@@ -17,79 +17,112 @@
     </div>
   </header>
 
-  <div class="tarjeta">
-    <div class="tarjeta__titulo">
-      <div>
-        <h2>{{ filtradas().length }} {{ filtradas().length === 1 ? 'sesión' : 'sesiones' }}</h2>
-        @if (busqueda()) {
-          <p>de {{ sesiones().length }} en total</p>
-        }
-      </div>
-      <label class="buscador">
+  <!-- Filtros -->
+  <div class="tarjeta filtros">
+    <div class="filtros__fila">
+      <label class="buscador buscador--ancho">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" /><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-        <input type="search" placeholder="Buscar por número, título o fecha…" aria-label="Buscar sesión"
+        <input type="search" placeholder="Buscar por número, comisión o tema…" aria-label="Buscar sesión"
                [value]="busqueda()" (input)="busqueda.set($any($event.target).value)" />
       </label>
+      <label class="campo campo--fecha">
+        <span class="campo__label">Desde</span>
+        <input type="date" [value]="desde()" [max]="hasta() || null" (change)="cambiarFecha('desde', $any($event.target).value)" />
+      </label>
+      <label class="campo campo--fecha">
+        <span class="campo__label">Hasta</span>
+        <input type="date" [value]="hasta()" [min]="desde() || null" (change)="cambiarFecha('hasta', $any($event.target).value)" />
+      </label>
     </div>
-
-    @if (cargando()) {
-      <div class="grid">
-        @for (n of [1, 2, 3, 4, 5, 6]; track n) {
-          <div class="skeleton tarjeta-skeleton"></div>
+    <div class="filtros__fila filtros__fila--secundaria">
+      <div class="rapidos" role="group" aria-label="Rango de fechas">
+        @for (r of rangos; track r.valor) {
+          <button type="button" class="rapido" [class.rapido--activo]="rango() === r.valor" (click)="elegirRango(r.valor)">{{ r.texto }}</button>
         }
       </div>
-    } @else if (sesiones().length === 0) {
-      <div class="vacio">
-        <span class="vacio__icono">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
-        </span>
-        <strong>Aún no hay sesiones en la base de datos</strong>
-        <span>Cuando lances una transcripción, la sesión aparecerá aquí.</span>
-        <a class="btn btn--primary btn--sm" routerLink="/transcribir">Lanzar una transcripción</a>
-      </div>
-    } @else if (filtradas().length === 0) {
-      <div class="vacio"><strong>Sin resultados</strong><span>Ninguna sesión coincide con «{{ busqueda() }}».</span></div>
-    } @else {
-      <ul class="grid">
-        @for (s of filtradas(); track s.id) {
-          <li class="sesion">
-            <a class="sesion__cuerpo" [routerLink]="['/sesiones', s.id]">
-              <div class="sesion__cabecera">
-                <span class="sesion__num">#{{ s.id }}</span>
-                @if (s.segmentos === 0) {
-                  <span class="chip">Sin texto</span>
-                } @else if (esVideo(s.url)) {
-                  <span class="chip chip--info">Video</span>
-                } @else {
-                  <span class="chip chip--primario">Audio SRT</span>
-                }
-              </div>
-              <h3 class="sesion__titulo">{{ s.titulo || 'Sesión ' + s.id }}</h3>
-              <p class="sesion__fecha">
-                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="1.7" /><path d="M4 10h16M9 3.5v4M15 3.5v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
-                {{ fecha(s.inicio) }}
-              </p>
-              <div class="sesion__datos">
-                <span><strong>{{ s.segmentos }}</strong> segmentos</span>
-                <span><strong>{{ duracion(s.duracion_seg) }}</strong> de audio</span>
-              </div>
-            </a>
-            <div class="sesion__acciones">
-              <a class="btn btn--primary btn--sm" [routerLink]="['/sesiones', s.id]">Revisar</a>
-              <a class="btn btn--outline btn--sm" [routerLink]="['/esteno', s.id]" title="Módulo estenográfico">Correctores</a>
-              <button type="button" class="btn btn--outline btn--sm" title="Descargar Word" aria-label="Descargar Word"
-                      [disabled]="descargando() === s.id" (click)="descargarWord(s)">
-                @if (descargando() === s.id) {
-                  <span class="spinner spinner--oscuro"></span>
-                } @else {
-                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                }
-                Word
-              </button>
-            </div>
-          </li>
+      @if (vacias()) {
+        <label class="casilla">
+          <input type="checkbox" [checked]="ocultarVacias()" (change)="ocultarVacias.set($any($event.target).checked)" />
+          Ocultar sesiones sin texto ({{ vacias() }})
+        </label>
+      }
+      <span class="filtros__total">
+        <strong>{{ filtradas().length }}</strong> de {{ sesiones().length }} sesiones
+        @if (hayFiltros()) {
+          · <button type="button" class="enlace" (click)="limpiar()">Quitar filtros</button>
         }
-      </ul>
-    }
+      </span>
+    </div>
   </div>
+
+  <!-- Lista -->
+  @if (cargando()) {
+    <div class="tarjeta">
+      @for (n of [1, 2, 3, 4, 5]; track n) { <div class="skeleton fila-skeleton"></div> }
+    </div>
+  } @else if (sesiones().length === 0) {
+    <div class="tarjeta vacio">
+      <span class="vacio__icono">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
+      </span>
+      <strong>Aún no hay sesiones</strong>
+      <span>Cuando lances una transcripción, la sesión aparecerá aquí.</span>
+      <a class="btn btn--primary btn--sm" routerLink="/transcribir">Lanzar una transcripción</a>
+    </div>
+  } @else if (filtradas().length === 0) {
+    <div class="tarjeta vacio">
+      <strong>Ninguna sesión coincide</strong>
+      <span>Prueba con otras fechas o con otra búsqueda.</span>
+      <button type="button" class="btn btn--outline btn--sm" (click)="limpiar()">Quitar filtros</button>
+    </div>
+  } @else {
+    @for (g of grupos(); track g.dia) {
+      <div class="grupo">
+        <h2 class="grupo__titulo">
+          {{ g.titulo }}
+          <span>{{ g.sesiones.length }} {{ g.sesiones.length === 1 ? 'sesión' : 'sesiones' }}</span>
+        </h2>
+        <ul class="lista tarjeta">
+          @for (s of g.sesiones; track s.id) {
+            <li class="fila" [class.fila--vacia]="!s.segmentos">
+              <a class="fila__principal" [routerLink]="['/sesiones', s.id]">
+                <span class="fila__num">#{{ s.id }}</span>
+                <span class="fila__datos">
+                  <span class="fila__titulo">{{ s.titulo || 'Sesión ' + s.id }}</span>
+                  <span class="fila__meta">
+                    <span>{{ hora(s) }}</span>
+                    <span>·</span>
+                    @if (s.segmentos) {
+                      <span>{{ s.segmentos }} segmentos</span>
+                      <span>·</span>
+                      <span>{{ duracion(s.duracion_seg) }} de audio</span>
+                    } @else {
+                      <span>Sin texto</span>
+                    }
+                    @if (esVideo(s.url)) {
+                      <span class="chip chip--info">Video</span>
+                    } @else {
+                      <span class="chip chip--primario">Audio SRT</span>
+                    }
+                  </span>
+                </span>
+              </a>
+              <div class="fila__acciones">
+                <a class="btn btn--primary btn--sm" [routerLink]="['/sesiones', s.id]">Revisar</a>
+                <a class="btn btn--outline btn--sm" [routerLink]="['/esteno', s.id]" title="Módulo estenográfico">Correctores</a>
+                <button type="button" class="btn btn--outline btn--sm" title="Descargar Word" [disabled]="descargando() === s.id || !s.segmentos" (click)="descargarWord(s)">
+                  @if (descargando() === s.id) {
+                    <span class="spinner spinner--oscuro"></span>
+                  } @else {
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  }
+                  Word
+                </button>
+              </div>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+  }
 </section>
