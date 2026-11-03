@@ -1593,14 +1593,20 @@ def main():
                 ruta, language="es", vad_filter=True,
                 beam_size=5, initial_prompt=prompt,
                 word_timestamps=True)
+            # Partir los segmentos que traen un silencio largo adentro: así
+            # el corte por pausa ve la frontera, las fórmulas de inicio de
+            # segmento ("Presidenta, informo...") pueden dispararse y la
+            # huella de voz no mezcla dos oradores en una misma rebanada.
+            # Se fuerza la evaluación aquí (list(...), no un generador
+            # perezoso) porque faster-whisper decodifica de verdad al
+            # iterar, no al llamar transcribe(): si el bug de alineación
+            # (IndexError en find_alignment con bloques casi silenciosos)
+            # revienta, que se salte solo este bloque y no tumbe la sesión
+            # completa obligando a reanudar a mano.
+            segmentos = list(dividir_por_silencios(segmentos, args.pausa_voz))
         except Exception as e:
             print(f"   [aviso] no se pudo transcribir {ruta}: {e}")
             return
-        # Partir los segmentos que traen un silencio largo adentro: así el
-        # corte por pausa ve la frontera, las fórmulas de inicio de segmento
-        # ("Presidenta, informo...") pueden dispararse y la huella de voz no
-        # mezcla dos oradores en una misma rebanada
-        segmentos = dividir_por_silencios(segmentos, args.pausa_voz)
         audio_bloque = None
         if args.voz:
             try:

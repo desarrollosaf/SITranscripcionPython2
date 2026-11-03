@@ -4355,9 +4355,25 @@ class Manejador(BaseHTTPRequestHandler):
                 "https://parlamentario.congresoedomex.gob.mx/backend/api/"
                 "eventos/ultimoseventos")
             import urllib.request
+
+            def _consultar_congreso():
+                # Cortes de red momentáneos hacia el Congreso ("No route to
+                # host" y similares) son comunes y se resuelven solos en
+                # segundos; 3 intentos con una pausa corta evitan que un
+                # blip se le muestre al usuario como error.
+                intentos = 3
+                for intento in range(1, intentos + 1):
+                    try:
+                        with urllib.request.urlopen(
+                                f"{base}/{tipo}", timeout=15) as r:
+                            return json.loads(r.read().decode("utf-8"))
+                    except Exception:
+                        if intento == intentos:
+                            raise
+                        time.sleep(2)
+
             try:
-                with urllib.request.urlopen(f"{base}/{tipo}", timeout=15) as r:
-                    datos = json.loads(r.read().decode("utf-8"))
+                datos = _consultar_congreso()
 
                 def _importancia(i):
                     try:
