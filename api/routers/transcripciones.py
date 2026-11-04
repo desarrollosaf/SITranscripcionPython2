@@ -110,6 +110,19 @@ def transcripciones_esperando_audio(usuario=Depends(usuario_actual)):
     return [_a_trabajo_out(f) for f in jobs.listar_trabajos_srt_activos()]
 
 
+@router.get("/eventos")
+def eventos_disponibles(tipo: int = 1, usuario=Depends(usuario_actual)):
+    """Como /lanzador/eventos, pero sin requerir admin: la app de la
+    consola de audio (agente_captura) también necesita elegir un evento
+    para iniciar su propia transcripción sin depender de que alguien con
+    permisos de administrador lo haga primero."""
+    try:
+        return parlamentario.resumen_eventos(tipo)
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"No pude consultar el Congreso: {e}")
+
+
 @router.get("/{job_id}", response_model=TrabajoOut)
 def ver_transcripcion(job_id: str, usuario=Depends(usuario_actual)):
     return _a_trabajo_out(_trabajo_o_404(job_id, usuario))

@@ -27,32 +27,10 @@ def eventos(tipo: int = 1, _admin=Depends(usuario_admin_actual)):
     """Últimos eventos del Congreso (1 = Sesión/Diputación permanente,
     0 = Comisión), para elegir uno en vez de escribir URL y participantes."""
     try:
-        crudos = parlamentario.obtener_eventos(tipo)
+        return parlamentario.resumen_eventos(tipo)
     except Exception as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"No pude consultar el Congreso: {e}")
-
-    def importancia(i):
-        try:
-            return int(i.get("importancia"))
-        except (TypeError, ValueError):
-            return 999
-
-    salida = []
-    for e in crudos:
-        comisiones = []
-        for i in sorted(e.get("integrantes") or [], key=importancia):
-            nombre = i.get("comision_nombre")
-            if nombre and nombre not in comisiones:
-                comisiones.append(nombre)
-        salida.append({"id": e.get("id"),
-                       "descripcion": (e.get("descripcion") or "").strip(),
-                       "fecha": parlamentario._fecha_hora_mx(e.get("fecha")),
-                       "tipoevento": e.get("tipoevento"),
-                       "liga": e.get("liga"),
-                       "comisiones": comisiones,
-                       "participantes": len(parlamentario.participantes_de_evento(e))})
-    return salida
 
 
 @router.post("/transcribir")

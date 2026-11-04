@@ -85,20 +85,43 @@ def etiqueta_evento(evento):
     """Arma una etiqueta legible 'fecha hora — [comisiones]' para usarla
     como URL/título del trabajo cuando el evento no trae liga de YouTube
     (mismo formato que el combo de eventos en revisar.py)."""
-    def _importancia(item):
-        try:
-            return int(item.get("importancia"))
-        except (TypeError, ValueError):
-            return 999
-
     fecha = _fecha_hora_mx(evento.get("fecha"))
+    comisiones = _comisiones_de_evento(evento)
+    bloque = "[" + ", ".join(comisiones) + "]" if comisiones else "(sin comisión)"
+    return f"{fecha} — {bloque}" if fecha else bloque
+
+
+def _importancia(item):
+    try:
+        return int(item.get("importancia"))
+    except (TypeError, ValueError):
+        return 999
+
+
+def _comisiones_de_evento(evento):
     comisiones = []
     for item in sorted(evento.get("integrantes") or [], key=_importancia):
         nombre = item.get("comision_nombre")
         if nombre and nombre not in comisiones:
             comisiones.append(nombre)
-    bloque = "[" + ", ".join(comisiones) + "]" if comisiones else "(sin comisión)"
-    return f"{fecha} — {bloque}" if fecha else bloque
+    return comisiones
+
+
+def resumen_eventos(tipo):
+    """Últimos eventos de ese tipo, resumidos para mostrarlos en un combo
+    (fecha/hora local, comisiones y cuántos participantes trae cada uno) —
+    lo usan tanto /lanzador/eventos (panel de admin) como
+    /transcripciones/eventos (agente_captura, sin requerir admin)."""
+    salida = []
+    for e in obtener_eventos(tipo):
+        salida.append({"id": e.get("id"),
+                       "descripcion": (e.get("descripcion") or "").strip(),
+                       "fecha": _fecha_hora_mx(e.get("fecha")),
+                       "tipoevento": e.get("tipoevento"),
+                       "liga": e.get("liga"),
+                       "comisiones": _comisiones_de_evento(e),
+                       "participantes": len(participantes_de_evento(e))})
+    return salida
 
 
 def participantes_de_evento(evento):
