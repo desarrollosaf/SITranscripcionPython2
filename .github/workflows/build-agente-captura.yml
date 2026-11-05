@@ -36,6 +36,7 @@ jobs:
           pyinstaller --onefile --windowed --noconfirm `
             --name AgenteCapturaAudio `
             --add-binary "agente_captura\ffmpeg.exe;." `
+            --collect-all customtkinter `
             agente_captura\app.py
 
       - uses: actions/upload-artifact@v4
