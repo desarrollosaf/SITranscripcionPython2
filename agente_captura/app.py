@@ -255,6 +255,10 @@ class ClienteAPI:
         return r.json()
 
     def listar_dispositivos(self):
+        # La captura usa DirectShow, que solo existe en Windows: en otro
+        # sistema (p. ej. para revisar la interfaz) no hay nada que listar.
+        if sys.platform != "win32":
+            return []
         return listar_dispositivos_audio()
 
     def lanzar_ffmpeg(self, cmd, archivo_log):
@@ -936,8 +940,11 @@ class PanelNuevaTranscripcion(ctk.CTkFrame):
         self.mapa_eventos = {}
         etiquetas = []
         for e in eventos:
-            etiqueta = (f"{e.get('fecha') or ''}  ·  "
-                        f"{(e.get('descripcion') or '')[:60]}")
+            # Las comisiones identifican mejor el evento; una sesión no trae
+            # comisiones, así que ahí se queda la descripción.
+            nombre = (", ".join(e.get("comisiones") or [])
+                      or (e.get("descripcion") or "")[:80])
+            etiqueta = f"{e.get('fecha') or ''}  ·  {nombre}"
             self.mapa_eventos[etiqueta] = e
             etiquetas.append(etiqueta)
         self.menu_evento.configure(values=etiquetas)
@@ -952,11 +959,14 @@ class PanelNuevaTranscripcion(ctk.CTkFrame):
         if not evento:
             self.detalle.configure(text="")
             return
-        comisiones = ", ".join(evento.get("comisiones") or []) or "Sin comisión"
-        participantes = evento.get("participantes")
-        self.detalle.configure(
-            text=f"{comisiones}  ·  {participantes} participantes "
-                 "(salen automáticos del evento)")
+        participantes = (f"{evento.get('participantes')} participantes "
+                         "(salen automáticos del evento)")
+        descripcion = (evento.get("descripcion") or "").strip()
+        # Sin comisiones, la descripción ya está en el selector.
+        if evento.get("comisiones") and descripcion:
+            self.detalle.configure(text=f"{descripcion}\n{participantes}")
+        else:
+            self.detalle.configure(text=participantes)
 
     def _iniciar(self):
         evento = self.mapa_eventos.get(self.menu_evento.get())

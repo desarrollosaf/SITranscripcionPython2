@@ -44,7 +44,9 @@ class ClienteDemo:
                  "descripcion": "Reunión de trabajo de ejemplo",
                  "comisiones": ["Comisión de Salud"]},
                 {"id": "c2", "fecha": f"{hoy} 13:00", "participantes": 18,
-                 "descripcion": "Reunión conjunta de ejemplo",
+                 "descripcion": "Tablas de valores de ejemplo: una descripción larga "
+                                "para ver cómo se acomoda debajo del selector cuando "
+                                "ocupa más de un renglón en la pantalla.",
                  "comisiones": ["Comisión de Educación", "Comisión de Cultura"]}],
         }
         self._trabajos = [
